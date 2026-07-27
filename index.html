@@ -11,6 +11,22 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Cookbook">
 <meta name="description" content="Every meal you cook — photos, notes, drawings, ratings and prep times, on any device.">
+<script>
+/* Runs before anything else so it catches errors in the scripts below.
+   A script that throws while loading leaves an empty page and nothing on
+   screen to explain it; these two listeners keep the evidence so the
+   start-up check at the bottom of this file can show it. */
+window.__bootErrors = [];
+window.addEventListener("error", function (e) {
+  window.__bootErrors.push(
+    e.message + (e.filename ? "  —  " + String(e.filename).split("/").pop() +
+    (e.lineno ? ":" + e.lineno : "") : "")
+  );
+}, true);
+window.addEventListener("unhandledrejection", function (e) {
+  window.__bootErrors.push("Unhandled promise: " + (e.reason && e.reason.message || e.reason));
+});
+</script>
 <style>
 :root{
   --bg:#F3F5EF; --panel:#FFFFFF; --ink:#1F2419; --muted:#6C7263;
@@ -368,5 +384,61 @@ select,input[type=number]{border:1px solid var(--line-dark);border-radius:7px;pa
 <script src="data.js"></script>
 <script src="recipe-parser.js"></script>
 <script src="app.js"></script>
+
+<script>
+/* Start-up check. If the app hasn't put anything on the page shortly after
+   load, something failed before React could mount — and React's own error
+   handling can't help, because it never got to run. Rather than leave a white
+   page, say which piece is missing and what the browser complained about. */
+(function () {
+  function check() {
+    var root = document.getElementById("root");
+    if (!root || root.childElementCount > 0) return;   // the app is up — nothing to do
+
+    var parts = [
+      ["React", window.React, "cdn.jsdelivr.net"],
+      ["ReactDOM", window.ReactDOM, "cdn.jsdelivr.net"],
+      ["htm", window.htm, "cdn.jsdelivr.net"],
+      ["config.js", window.COOKBOOK_CONFIG, "this site"],
+      ["data.js", window.COOK_TEMPS, "this site"],
+      ["recipe-parser.js", window.RecipeParser, "this site"],
+      ["app.js", window.__cookbookLoaded, "this site"]
+    ];
+    var missing = parts.filter(function (p) { return !p[1]; });
+    var fromCdn = missing.filter(function (p) { return p[2] !== "this site"; }).length > 0;
+    var errs = window.__bootErrors || [];
+
+    var h = '<div class="crash"><h2>The app didn\'t start</h2>';
+    h += "<p>Nothing is lost — your cookbook is stored in this browser and this is only a loading problem.</p>";
+
+    if (missing.length) {
+      h += "<p><b>Didn't load:</b> " + missing.map(function (p) { return p[0]; }).join(", ") + "</p>";
+      h += fromCdn
+        ? '<p class="crash-hint">Parts of this list come from the <b>cdn.jsdelivr.net</b> code network. ' +
+          "A blocked connection, an ad blocker or an offline moment will stop them arriving. " +
+          "Try again with any blocker paused.</p>"
+        : '<p class="crash-hint">These files sit next to index.html on the site. ' +
+          "Check they uploaded, and that the names match exactly — capital letters count.</p>";
+    } else {
+      h += "<p>Every file arrived, so this is an error inside the app itself.</p>";
+    }
+
+    if (errs.length) {
+      h += "<p><b>The browser reported:</b></p><pre>" +
+           errs.slice(0, 6).join("\n").replace(/[<>&]/g, function (c) {
+             return { "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c];
+           }) + "</pre>";
+    } else {
+      h += "<p>No error message was reported, which usually means a file is missing rather than broken.</p>";
+    }
+
+    h += '<p class="crash-hint">If you\'re showing this to someone for help, a photo of this whole box is exactly what they need.</p>';
+    h += "</div>";
+    root.innerHTML = h;
+  }
+  if (document.readyState === "complete") setTimeout(check, 1500);
+  else window.addEventListener("load", function () { setTimeout(check, 1500); });
+})();
+</script>
 </body>
 </html>

@@ -2292,6 +2292,10 @@ class ErrorBoundary extends React.Component {
 /* ------------------------------------------------------------------ */
 /*  Mount                                                              */
 /* ------------------------------------------------------------------ */
+/* Tells the start-up check in index.html that this file parsed and ran. If it
+   throws before here, that flag stays unset and the check reports app.js. */
+window.__cookbookLoaded = true;
+
 ReactDOM.createRoot(document.getElementById("root")).render(
   html`<${ErrorBoundary}><${CookingOrganizer} /><//>`
 );
