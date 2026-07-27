@@ -20,6 +20,23 @@ const { useState, useEffect, useRef, useCallback, useMemo } = React;
 const html = htm.bind(React.createElement);
 const Frag = React.Fragment;
 
+/* data.js and recipe-parser.js are separate files, which means either can fail
+   to arrive — a half-finished upload, a stale cache, a typo in a filename. When
+   that happens the app carries on with empty charts and says so, rather than
+   dying the moment you open a tab that needed them. */
+const COOK_TEMPS = window.COOK_TEMPS || [];
+const DONENESS = window.DONENESS || [];
+const PANTRY_GROUPS = window.PANTRY_GROUPS || [];
+const STARTER_MEALS = window.STARTER_MEALS || [];
+const Parser = window.RecipeParser || {
+  parseRecipe: () => null,
+  ingredientKey: (s) => String(s || "").toLowerCase().replace(/[^a-z\s-]/g, " ").replace(/\s+/g, " ").trim(),
+};
+const MISSING_FILES = [
+  !window.COOK_TEMPS && "data.js",
+  !window.RecipeParser && "recipe-parser.js",
+].filter(Boolean);
+
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
 /* ------------------------------------------------------------------ */
@@ -244,7 +261,7 @@ function matchKeys(name) {
    "chicken breast" in the pantry should satisfy "chicken" in a recipe and
    vice-versa. */
 function pantryHas(haveSet, ingredient) {
-  const keys = matchKeys(RecipeParser.ingredientKey(ingredient) || ingredient);
+  const keys = matchKeys(Parser.ingredientKey(ingredient) || ingredient);
   for (const k of keys) {
     if (!k) continue;
     if (haveSet.has(k)) return true;
@@ -261,7 +278,7 @@ function scoreRecipe(recipe, haveSet) {
   if (!ing.length) return null;
   const missing = [], have = [];
   for (const i of ing) {
-    const key = normalize(RecipeParser.ingredientKey(i) || i);
+    const key = normalize(Parser.ingredientKey(i) || i);
     if (pantryHas(haveSet, i)) have.push(i);
     else if (STAPLES.has(key)) have.push(i);          // assume you have salt
     else missing.push(i);
@@ -1091,7 +1108,7 @@ function RecipePaste({ onClose, onCreate, onFill, openMealName }) {
   useEffect(() => { if (taRef.current) taRef.current.focus(); }, []);
 
   const run = () => {
-    const p = RecipeParser.parseRecipe(text);
+    const p = Parser.parseRecipe(text);
     if (!p) return;
     setParsed(p);
   };
@@ -1197,7 +1214,7 @@ function TempsTab({ meals, onInsert, customTemps, setCustomTemps }) {
   const [draft, setDraft] = useState({ food: "", oven: "", air: "", pan: "" });
 
   const needle = q.trim().toLowerCase();
-  const groups = window.COOK_TEMPS
+  const groups = COOK_TEMPS
     .map((g) => ({ ...g, rows: g.rows.filter((r) => !needle || r.food.toLowerCase().includes(needle)) }))
     .filter((g) => g.rows.length);
 
@@ -1307,7 +1324,7 @@ function TempsTab({ meals, onInsert, customTemps, setCustomTemps }) {
           <table className="temp-table">
             <thead><tr><th>Food</th><th>Internal</th><th></th></tr></thead>
             <tbody>
-              ${window.DONENESS.map((d) => html`
+              ${DONENESS.map((d) => html`
                 <tr key=${d.food}><td className="tt-food">${d.food}</td><td><b>${d.temp}</b></td><td className="tt-note">${d.note}</td></tr>`)}
             </tbody>
           </table>
@@ -1316,7 +1333,7 @@ function TempsTab({ meals, onInsert, customTemps, setCustomTemps }) {
           onClick=${() => onInsert(target, {
             title: "Cooked-through temperatures",
             headers: ["Food", "Internal", "Note"],
-            rows: window.DONENESS.map((d) => [d.food, d.temp, d.note]),
+            rows: DONENESS.map((d) => [d.food, d.temp, d.note]),
           })}>insert this table</button>
       </div>
     </div>`;
@@ -1361,7 +1378,7 @@ function PantryTab({ meals, pantry, setPantry, onOpen, onAddStarter }) {
       .filter((m) => (m.ingredients || []).length)
       .map((m) => ({ id: m.id, name: m.name, mealType: m.mealType, device: m.device, prepTime: m.prepTime,
         rating: m.rating, ingredients: m.ingredients, mine: true }));
-    const pool = [...mine, ...window.STARTER_MEALS.map((r) => ({ ...r, mine: false }))];
+    const pool = [...mine, ...STARTER_MEALS.map((r) => ({ ...r, mine: false }))];
     return pool
       .map((r) => ({ recipe: r, score: scoreRecipe(r, have) }))
       .filter((x) => x.score)
@@ -1403,7 +1420,7 @@ function PantryTab({ meals, pantry, setPantry, onOpen, onAddStarter }) {
                   <button onClick=${() => removeCustom(c)}>✕</button>
                 </span>`)}
             </div>`}
-          ${window.PANTRY_GROUPS.map((g) => html`
+          ${PANTRY_GROUPS.map((g) => html`
             <div key=${g.group} className="fgroup pantry-group">
               <span className="fg-label">${g.group}</span>
               ${g.items.map((i) => html`
@@ -2190,6 +2207,16 @@ function CookingOrganizer() {
         </div>
       </header>
 
+      ${MISSING_FILES.length > 0 && html`
+        <div className="missing-banner">
+          <b>${MISSING_FILES.join(" and ")}</b> ${MISSING_FILES.length > 1 ? "didn't" : "didn't"} load.
+          Your meals are fine, but
+          ${!window.COOK_TEMPS ? " the temperature charts, pantry list and built-in recipes are empty" : ""}
+          ${MISSING_FILES.length > 1 ? " and" : ""}
+          ${!window.RecipeParser ? " pasting a recipe won't work" : ""}.
+          Upload ${MISSING_FILES.length > 1 ? "those files" : "that file"} next to index.html and reload.
+        </div>`}
+
       ${!ready
         ? html`<div className="loading">Opening the cookbook…</div>`
         : open
@@ -2235,9 +2262,39 @@ function CookingOrganizer() {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Crash guard                                                        */
+/*  React unmounts the whole tree when a render throws, which shows as  */
+/*  a blank white page with no clue what happened. Anything that gets   */
+/*  through lands here instead, with the error and a way out.          */
+/* ------------------------------------------------------------------ */
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { err: null }; }
+  static getDerivedStateFromError(err) { return { err }; }
+  componentDidCatch(err, info) { console.error("The Cookbook Board hit an error:", err, info); }
+  render() {
+    if (!this.state.err) return this.props.children;
+    return html`
+      <div className="crash">
+        <h2>Something in the app broke</h2>
+        <p>Your cookbook is safe — this is a display problem, nothing was deleted.</p>
+        <pre>${String(this.state.err && this.state.err.message || this.state.err)}</pre>
+        ${MISSING_FILES.length > 0 && html`
+          <p className="crash-hint">
+            <b>Probable cause:</b> ${MISSING_FILES.join(" and ")} ${MISSING_FILES.length > 1 ? "are" : "is"} missing
+            from the site. Upload ${MISSING_FILES.length > 1 ? "those files" : "that file"} alongside
+            index.html and app.js, then reload.
+          </p>`}
+        <button className="btn btn-primary" onClick=${() => location.reload()}>Reload the page</button>
+      </div>`;
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Mount                                                              */
 /* ------------------------------------------------------------------ */
-ReactDOM.createRoot(document.getElementById("root")).render(html`<${CookingOrganizer} />`);
+ReactDOM.createRoot(document.getElementById("root")).render(
+  html`<${ErrorBoundary}><${CookingOrganizer} /><//>`
+);
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
