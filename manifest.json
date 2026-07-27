@@ -1,0 +1,19 @@
+{
+  "name": "The Cookbook Board",
+  "short_name": "Cookbook",
+  "description": "Every meal you cook — photos, notes, drawings, ratings and prep times, on any device.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "background_color": "#F3F5EF",
+  "theme_color": "#3E6B4F",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
