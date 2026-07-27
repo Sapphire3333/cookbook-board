@@ -5,8 +5,9 @@
 
    Deliberately never touches Supabase traffic — API and Storage requests always
    go to the network, so you can't be served a stale cookbook. */
-const CACHE = "cookbook-v1";
-const SHELL = ["./", "./index.html", "./app.js", "./config.js", "./manifest.json", "./icon.svg"];
+const CACHE = "cookbook-v2";
+const SHELL = ["./", "./index.html", "./app.js", "./data.js", "./recipe-parser.js",
+  "./config.js", "./manifest.json", "./icon.svg"];
 
 self.addEventListener("install", e => {
   e.waitUntil(

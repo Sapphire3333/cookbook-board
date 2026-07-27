@@ -1,29 +1,22 @@
 /* ============================================================
    The Cookbook Board
    ------------------------------------------------------------
-   Same app as the original artifact, with three changes:
+   Storage lives in IndexedDB (database "cookbook"):
 
-   1. Storage. window.storage is gone. Meals live in IndexedDB
-      (database "cookbook"), one record per meal — the same
-      per-meal keying idea as before, so an index of meal ids plus
-      one record each. Photos do NOT live inside the meal record:
-      each photo is a Blob in its own store, keyed
-      "<mealId>__<itemId>". Blobs are disk-backed and roughly a
-      third smaller than the base64 data URLs the artifact kept in
-      memory, which is what lets this hold hundreds of photos.
-      In memory a photo is an object URL; it only ever becomes a
-      data URL when you export a backup.
+     meals    one record per meal, photo bytes stripped out
+     images   one JPEG Blob per photo, key "<mealId>__<itemId>"
+     backups  numbered snapshots, restorable by a 4-digit code
+     meta     settings, meal order, pantry, deletion tombstones
 
-   2. Backups. Byte-identical format to the artifact —
-      { app, exported, meals } with photos inlined as data URLs —
-      so old backup files restore here and new ones would restore
-      there.
-
-   3. Optional Supabase sync (see config.js / schema.sql), so the
-      same cookbook opens on your phone and your computer.
+   Photos are Blobs rather than base64 data URLs: about a third
+   smaller, disk-backed rather than held in memory, and shared by
+   reference with backups so a snapshot costs almost nothing.
+   They only become data URLs when you export a backup file, which
+   keeps that file byte-compatible with the original artifact
+   version of this app.
    ============================================================ */
 
-const { useState, useEffect, useRef, useCallback } = React;
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
 const html = htm.bind(React.createElement);
 const Frag = React.Fragment;
 
@@ -67,6 +60,11 @@ const FRAME_SPOTS = [
   { bottom: 3, left: 93, s: 21, r: 24 },
 ];
 
+/* Things almost everyone has. Missing one of these shouldn't stop a recipe
+   being suggested, so they score much lower than real ingredients. */
+const STAPLES = new Set(["salt", "black pepper", "pepper", "water", "olive oil", "vegetable oil",
+  "oil", "butter", "sugar", "flour", "garlic", "onion"]);
+
 const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4);
 const imgKey = (mealId, itemId) => mealId + "__" + itemId;
 
@@ -74,19 +72,16 @@ function newMeal() {
   return {
     id: uid(), name: "New meal", mealType: "Dinner", device: "Stovetop",
     prepTime: 30, rating: 7.0, favorite: false, coverId: null, variants: [],
-    instructions: "", items: [], strokes: [], boardH: 640,
+    instructions: "", ingredients: [], items: [], strokes: [], boardH: 640,
     created: Date.now(), modified: Date.now(),
   };
 }
 
 /* ------------------------------------------------------------------ */
 /*  IndexedDB                                                          */
-/*  meals  — one record per meal, photos stripped out                  */
-/*  images — one Blob per photo, key "<mealId>__<itemId>"              */
-/*  meta   — settings, the meal-id index, the deleted-meal tombstones  */
 /* ------------------------------------------------------------------ */
 const DB_NAME = "cookbook";
-const DB_VER = 1;
+const DB_VER = 2;
 let _dbPromise = null;
 
 function openDb() {
@@ -98,6 +93,7 @@ function openDb() {
       if (!d.objectStoreNames.contains("meals")) d.createObjectStore("meals", { keyPath: "id" });
       if (!d.objectStoreNames.contains("images")) d.createObjectStore("images");
       if (!d.objectStoreNames.contains("meta")) d.createObjectStore("meta");
+      if (!d.objectStoreNames.contains("backups")) d.createObjectStore("backups", { keyPath: "code" });
     };
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error);
@@ -157,14 +153,12 @@ function canvasToBlob(c, type, q) {
     else rej(new Error("no toBlob"));
   });
 }
-/* Downscale to 1200px on the long edge and re-encode as JPEG, exactly as the
-   artifact did — only the result is a Blob rather than a data URL. */
 async function processImageFile(file) {
   const MAX = 1200;
-  let src = null, img = null;
+  let src = null;
   try {
     src = URL.createObjectURL(file);
-    img = await loadImgEl(src);
+    const img = await loadImgEl(src);
     let w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
     if (!w || !h) throw new Error("no dimensions");
     const scale = Math.min(1, MAX / Math.max(w, h));
@@ -199,7 +193,6 @@ function dataURLToBlob(dataURL) {
 }
 
 /* ---------- meal <-> storage ---------- */
-/* Photo bytes never go into the meal record — only the geometry does. */
 function stripMeal(meal) {
   return {
     ...meal,
@@ -218,7 +211,95 @@ async function hydrateMeal(meal) {
     } catch { /* unreadable photo — the card just shows a gap */ }
     items.push({ ...it, src });
   }
-  return { ...meal, items, variants: meal.variants || [], strokes: meal.strokes || [] };
+  return {
+    ...meal, items,
+    variants: meal.variants || [], strokes: meal.strokes || [], ingredients: meal.ingredients || [],
+  };
+}
+
+/* ---------- pantry matching ---------- */
+const normalize = (s) => String(s || "").toLowerCase().trim()
+  .replace(/[^a-z\s-]/g, "").replace(/\s+/g, " ");
+
+/* Singular/plural and the handful of names that genuinely differ. */
+function matchKeys(name) {
+  const n = normalize(name);
+  const out = new Set([n]);
+  if (n.endsWith("es")) out.add(n.slice(0, -2));
+  if (n.endsWith("s")) out.add(n.slice(0, -1));
+  out.add(n + "s");
+  const ALIAS = {
+    "aubergine": "eggplant", "courgette": "zucchini", "coriander": "cilantro",
+    "spring onion": "scallion", "chickpeas": "garbanzo", "prawns": "shrimp",
+    "mince": "ground beef", "bicarbonate of soda": "baking soda", "passata": "tomato sauce",
+  };
+  for (const [a, b] of Object.entries(ALIAS)) {
+    if (n.includes(a)) out.add(n.replace(a, b));
+    if (n.includes(b)) out.add(n.replace(b, a));
+  }
+  return [...out].filter(Boolean);
+}
+
+/* Does the pantry cover this ingredient? Substring both ways, because
+   "chicken breast" in the pantry should satisfy "chicken" in a recipe and
+   vice-versa. */
+function pantryHas(haveSet, ingredient) {
+  const keys = matchKeys(RecipeParser.ingredientKey(ingredient) || ingredient);
+  for (const k of keys) {
+    if (!k) continue;
+    if (haveSet.has(k)) return true;
+    for (const h of haveSet) {
+      if (h.length < 3 || k.length < 3) continue;
+      if (k.includes(h) || h.includes(k)) return true;
+    }
+  }
+  return false;
+}
+
+function scoreRecipe(recipe, haveSet) {
+  const ing = recipe.ingredients || [];
+  if (!ing.length) return null;
+  const missing = [], have = [];
+  for (const i of ing) {
+    const key = normalize(RecipeParser.ingredientKey(i) || i);
+    if (pantryHas(haveSet, i)) have.push(i);
+    else if (STAPLES.has(key)) have.push(i);          // assume you have salt
+    else missing.push(i);
+  }
+  return { have, missing, pct: Math.round((have.length / ing.length) * 100) };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Backups                                                            */
+/* ------------------------------------------------------------------ */
+const MAX_BACKUPS = 20;
+
+function makeCode(taken) {
+  for (let i = 0; i < 500; i++) {
+    const c = String(Math.floor(1000 + Math.random() * 9000));
+    if (!taken.has(c)) return c;
+  }
+  return String(Date.now()).slice(-4);
+}
+
+/* A snapshot stores meal records and the photo keys they point at. The photos
+   themselves are not copied — the orphan sweep just knows not to delete a photo
+   any backup still references, so a snapshot costs a few KB however many
+   photos your cookbook holds. */
+async function createBackup(meals, label) {
+  const existing = await idb.getAll("backups");
+  const code = makeCode(new Set(existing.map((b) => b.code)));
+  const imageKeys = [];
+  for (const m of meals) for (const it of m.items) if (it.kind === "image") imageKeys.push(imgKey(m.id, it.id));
+  await idb.put("backups", {
+    code, at: Date.now(), label: label || "",
+    meals: meals.map(stripMeal), imageKeys,
+    mealCount: meals.length, photoCount: imageKeys.length,
+  });
+  // Keep the list from growing forever; oldest automatic ones go first.
+  const all = (await idb.getAll("backups")).sort((a, b) => b.at - a.at);
+  for (const old of all.slice(MAX_BACKUPS)) await idb.del("backups", old.code);
+  return code;
 }
 
 /* ------------------------------------------------------------------ */
@@ -259,14 +340,11 @@ const Sync = {
     this.user = null;
   },
 
-  /* Upload any photo of this meal that isn't in the bucket yet, then write the
-     row. Returns the meal with fresh "remote" paths so we don't re-upload. */
   async pushMeal(meal) {
     const items = [];
     for (const it of meal.items) {
       if (it.kind !== "image" || it.remote) { items.push(it); continue; }
-      const key = imgKey(meal.id, it.id);
-      const blob = await idb.get("images", key);
+      const blob = await idb.get("images", imgKey(meal.id, it.id));
       if (!blob) { items.push(it); continue; }
       const p = this.path(meal.id, it.id);
       const { error } = await this.supa.storage.from(BUCKET).upload(p, blob, {
@@ -283,7 +361,6 @@ const Sync = {
     return next;
   },
 
-  /* Bring a remote meal down, fetching any photo we don't already hold. */
   async pullMeal(row) {
     const meal = row.data;
     meal.id = row.id;
@@ -291,8 +368,7 @@ const Sync = {
     for (const it of meal.items || []) {
       if (it.kind !== "image" || !it.remote) continue;
       const key = imgKey(meal.id, it.id);
-      const have = await idb.get("images", key);
-      if (have) continue;
+      if (await idb.get("images", key)) continue;
       const { data, error } = await this.supa.storage.from(BUCKET).download(it.remote);
       if (!error && data) await idb.put("images", data, key);
     }
@@ -430,40 +506,29 @@ function ColorWheel({ color, onChange }) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Meal board (images + notepads + drawing)                           */
+/*  Meal page canvas                                                   */
+/*  Items and strokes are positioned against the WHOLE meal page, not  */
+/*  a board box, so a photo can sit over the rating fields or beside   */
+/*  the instructions. The dotted area is just a hint about where       */
+/*  there's free room.                                                 */
 /* ------------------------------------------------------------------ */
-function MealBoard({ meal, mode, draw, update, onDropImage, sizeRef }) {
-  const boardRef = useRef(null);
+function PageCanvas({ meal, mode, draw, update, pageRef }) {
   const dragRef = useRef(null);
   const drawRef = useRef(null);
-  const [ephem, setEphem] = useState(null); // {id, padId, dx, dy, dw, dh}
-  const [live, setLive] = useState(null);   // stroke in progress
+  const layerRef = useRef(null);
+  const [ephem, setEphem] = useState(null);
+  const [live, setLive] = useState(null);
 
   const pt = (e) => {
-    const r = boardRef.current.getBoundingClientRect();
+    const r = pageRef.current.getBoundingClientRect();
     return [e.clientX - r.left, e.clientY - r.top];
   };
 
-  /* Let the detail view know how wide the board actually is, so a photo added
-     on a phone lands somewhere you can reach rather than off the right edge. */
-  useEffect(() => {
-    if (!sizeRef) return;
-    const measure = () => {
-      if (boardRef.current) sizeRef.current = boardRef.current.getBoundingClientRect().width;
-    };
-    measure();
-    window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
-  }, [sizeRef]);
-
-  /* ----- drawing -----
-     Pointer capture keeps the whole stroke coming to the board even when your
-     finger slides off it, and touch-action:none on the board stops the page
-     scrolling underneath while you draw. */
+  /* ----- drawing ----- */
   const drawDown = (e) => {
     if (mode !== "draw" || !e.isPrimary) return;
     e.preventDefault();
-    try { boardRef.current.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
+    try { layerRef.current.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
     drawRef.current = e.pointerId;
     const [x, y] = pt(e);
     if (draw.tool === "pen" || draw.tool === "highlight") {
@@ -493,9 +558,7 @@ function MealBoard({ meal, mode, draw, update, onDropImage, sizeRef }) {
   };
   const drawCancel = () => { drawRef.current = null; setLive(null); };
 
-  /* ----- arrange: move / resize -----
-     One pointer only, captured on the element you grabbed, so a second finger
-     (pinch-zooming the page) never hijacks the drag. */
+  /* ----- move / resize ----- */
   const startMove = (e, item) => {
     if (mode !== "arrange" || !e.isPrimary) return;
     e.preventDefault(); e.stopPropagation();
@@ -524,17 +587,30 @@ function MealBoard({ meal, mode, draw, update, onDropImage, sizeRef }) {
     dragRef.current = null;
     if (d.kind === "move") {
       const dx = e.clientX - d.sx, dy = e.clientY - d.sy;
+      /* Keep whatever you dropped fully inside the page width. Without this you
+         can shove something off the right edge — unreachable on a phone, and the
+         whole page grows a sideways scrollbar to accommodate it. */
+      const pageW = pageRef.current ? pageRef.current.clientWidth : 900;
       update((m) => {
+        /* Work out the delta once, from the item actually grabbed, then apply
+           that same delta to a notepad's contents and drawings so a clamped pad
+           never drifts apart from the things stuck to it. */
+        const grabbed = m.items.find((it) => it.id === d.id);
+        let adx = dx, ady = dy;
+        if (grabbed) {
+          const nx = Math.min(Math.max(grabbed.x + dx, 0), Math.max(0, pageW - grabbed.w));
+          const ny = Math.max(0, grabbed.y + dy);
+          adx = Math.round(nx - grabbed.x);
+          ady = Math.round(ny - grabbed.y);
+        }
         let items = m.items.map((it) => {
-          if (it.id === d.id) return { ...it, x: it.x + dx, y: it.y + dy };
-          if (d.isPad && it.parent === d.id) return { ...it, x: it.x + dx, y: it.y + dy };
+          if (it.id === d.id || (d.isPad && it.parent === d.id)) return { ...it, x: it.x + adx, y: it.y + ady };
           return it;
         });
-        const strokes = d.isPad ? m.strokes.map((s) => (s.parent === d.id ? translateStroke(s, dx, dy) : s)) : m.strokes;
-        // re-parent a moved image / re-check pad membership
+        const strokes = d.isPad ? m.strokes.map((s) => (s.parent === d.id ? translateStroke(s, adx, ady) : s)) : m.strokes;
         if (!d.isPad) {
           const moved = items.find((it) => it.id === d.id);
-          if (moved && moved.kind === "image") {
+          if (moved && moved.kind !== "note") {
             const cx = moved.x + moved.w / 2, cy = moved.y + moved.h / 2;
             const pad = [...items].reverse().find((it) => it.kind === "note" && inside(cx, cy, it));
             items = items.map((it) => (it.id === d.id ? { ...it, parent: pad ? pad.id : null } : it));
@@ -544,9 +620,18 @@ function MealBoard({ meal, mode, draw, update, onDropImage, sizeRef }) {
       });
     } else {
       const dw = e.clientX - d.sx, dh = e.clientY - d.sy;
+      const pageW = pageRef.current ? pageRef.current.clientWidth : 900;
       update((m) => ({
         ...m,
-        items: m.items.map((it) => (it.id === d.id ? { ...it, w: Math.max(60, d.w + dw), h: Math.max(50, d.h + dh) } : it)),
+        items: m.items.map((it) => (it.id === d.id
+          ? {
+              ...it,
+              // Not wider than the room left to its right, for the same reason
+              // dropping is clamped: nothing should push the page sideways.
+              w: Math.max(60, Math.min(Math.round(d.w + dw), Math.max(60, pageW - it.x))),
+              h: Math.max(50, Math.round(d.h + dh)),
+            }
+          : it)),
       }));
     }
     setEphem(null);
@@ -603,22 +688,26 @@ function MealBoard({ meal, mode, draw, update, onDropImage, sizeRef }) {
   const toFront = (id) => setLayer(id, (allLayers.length ? Math.max(...allLayers) : 0) + 1);
   const toBack = (id) => setLayer(id, (allLayers.length ? Math.min(...allLayers) : 0) - 1);
   const setOpacity = (id, v) => update((m) => ({ ...m, items: m.items.map((x) => (x.id === id ? { ...x, opacity: v } : x)) }));
+  const removeItem = (id) => update((m) => ({
+    ...m,
+    items: m.items.filter((x) => x.id !== id).map((x) => (x.parent === id ? { ...x, parent: null } : x)),
+    strokes: m.strokes.map((s) => (s.parent === id ? { ...s, parent: null } : s)),
+    coverId: m.coverId === id ? null : m.coverId,
+  }));
+  const patchItem = (id, patch) => update((m) => ({
+    ...m, items: m.items.map((x) => (x.id === id ? { ...x, ...patch } : x)),
+  }));
 
   const dragHandlers = { onPointerMove: dragMove, onPointerUp: dragEnd, onPointerCancel: dragCancel };
 
   return html`
-    <div ref=${boardRef} className=${"board board-" + mode} style=${{ height: meal.boardH }}
-      onPointerDown=${drawDown} onPointerMove=${drawMove} onPointerUp=${drawUp} onPointerCancel=${drawCancel}
-      onDragOver=${(e) => { e.preventDefault(); }}
-      onDrop=${(e) => {
-        if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
-        e.preventDefault();
-        onDropImage([...e.dataTransfer.files]);
-      }}>
+    <div ref=${layerRef} className=${"pagelayer pagelayer-" + mode}
+      onPointerDown=${drawDown} onPointerMove=${drawMove} onPointerUp=${drawUp} onPointerCancel=${drawCancel}>
 
       ${layered.map((it, idx) => {
         const [dx, dy] = off(it); const [w, h] = dims(it);
         const z = 5 + idx;
+
         if (it.kind === "note") return html`
           <div key=${it.id} className="note"
             style=${{ left: it.x + dx, top: it.y + dy, width: w, height: h, zIndex: z, background: it.color || "#FFF7CF" }}>
@@ -626,16 +715,55 @@ function MealBoard({ meal, mode, draw, update, onDropImage, sizeRef }) {
               <span>notepad</span>
               ${mode === "arrange" && html`
                 <button className="mini-x" onPointerDown=${(e) => e.stopPropagation()}
-                  onClick=${() => update((m) => ({
-                    ...m,
-                    items: m.items.filter((x) => x.id !== it.id).map((x) => (x.parent === it.id ? { ...x, parent: null } : x)),
-                    strokes: m.strokes.map((s) => (s.parent === it.id ? { ...s, parent: null } : s)),
-                  }))}>✕</button>`}
+                  onClick=${() => removeItem(it.id)}>✕</button>`}
             </div>
             <textarea className="note-text" value=${it.text || ""} placeholder="jot something…"
               readOnly=${mode === "draw"}
-              onChange=${(e) => update((m) => ({ ...m, items: m.items.map((x) => (x.id === it.id ? { ...x, text: e.target.value } : x)) }))}
+              onChange=${(e) => patchItem(it.id, { text: e.target.value })}
               onPointerDown=${(e) => { if (mode !== "draw") e.stopPropagation(); }} />
+            ${mode === "arrange" && html`
+              <div className="handle" onPointerDown=${(e) => startResize(e, it)} ...${dragHandlers}></div>`}
+          </div>`;
+
+        if (it.kind === "table") return html`
+          <div key=${it.id} className=${"ptable" + (mode === "arrange" ? " ptable-arr" : "")}
+            style=${{ left: it.x + dx, top: it.y + dy, width: w, height: h, zIndex: z }}>
+            <div className="ptable-bar" onPointerDown=${(e) => startMove(e, it)} ...${dragHandlers}>
+              <input className="ptable-title" value=${it.title || ""} placeholder="table"
+                readOnly=${mode === "draw"}
+                onChange=${(e) => patchItem(it.id, { title: e.target.value })}
+                onPointerDown=${(e) => { if (mode !== "draw") e.stopPropagation(); }} />
+              ${mode === "arrange" && html`
+                <button className="mini-x" onPointerDown=${(e) => e.stopPropagation()}
+                  onClick=${() => removeItem(it.id)}>✕</button>`}
+            </div>
+            <div className="ptable-scroll" onPointerDown=${(e) => { if (mode !== "draw") e.stopPropagation(); }}>
+              <table>
+                <thead><tr>${(it.headers || []).map((hd, ci) => html`<th key=${ci}>${hd}</th>`)}</tr></thead>
+                <tbody>
+                  ${(it.rows || []).map((row, ri) => html`
+                    <tr key=${ri}>
+                      ${row.map((cell, ci) => html`
+                        <td key=${ci}>
+                          <input value=${cell} readOnly=${mode === "draw"}
+                            onChange=${(e) => {
+                              const rows = it.rows.map((r, i) => (i === ri ? r.map((c, j) => (j === ci ? e.target.value : c)) : r));
+                              patchItem(it.id, { rows });
+                            }} />
+                        </td>`)}
+                      ${mode === "arrange" && html`
+                        <td className="ptable-del">
+                          <button onClick=${() => patchItem(it.id, { rows: it.rows.filter((_, i) => i !== ri) })}>✕</button>
+                        </td>`}
+                    </tr>`)}
+                </tbody>
+              </table>
+              ${mode === "arrange" && html`
+                <button className="ptable-add"
+                  onClick=${() => patchItem(it.id, { rows: [...(it.rows || []), (it.headers || []).map(() => "")] })}>
+                  + row
+                </button>`}
+            </div>
             ${mode === "arrange" && html`
               <div className="handle" onPointerDown=${(e) => startResize(e, it)} ...${dragHandlers}></div>`}
           </div>`;
@@ -663,30 +791,56 @@ function MealBoard({ meal, mode, draw, update, onDropImage, sizeRef }) {
                   ${isCover ? "✓ list image" : "use as list image"}
                 </button>
                 <button className="mini-x" onPointerDown=${(e) => e.stopPropagation()}
-                  onClick=${() => update((m) => ({
-                    ...m,
-                    items: m.items.filter((x) => x.id !== it.id),
-                    coverId: m.coverId === it.id ? null : m.coverId,
-                  }))}>✕</button>
+                  onClick=${() => removeItem(it.id)}>✕</button>
                 <div className="handle" onPointerDown=${(e) => startResize(e, it)} ...${dragHandlers}></div>
               <//>`}
           </div>`;
       })}
 
-      <svg className="strokes" style=${{ pointerEvents: "none" }}>
+      <svg className="strokes">
         ${meal.strokes.map((s, i) => renderStroke(s, s.id || i))}
         ${live && renderStroke(live, "live")}
       </svg>
+    </div>`;
+}
 
-      ${meal.items.length === 0 && meal.strokes.length === 0 && html`
-        <div className="board-empty">Paste, drop or upload photos, add a notepad, or switch to Draw. Everything lands on this board.</div>`}
+/* ------------------------------------------------------------------ */
+/*  Ingredients editor                                                 */
+/* ------------------------------------------------------------------ */
+function Ingredients({ list, have, onChange }) {
+  const [draft, setDraft] = useState("");
+  const add = () => {
+    const parts = draft.split(/,|\n/).map((s) => s.trim()).filter(Boolean);
+    if (parts.length) onChange([...list, ...parts]);
+    setDraft("");
+  };
+  return html`
+    <div className="ing-block">
+      <div className="var-head">
+        <span className="fg-label" style=${{ width: "auto" }}>Ingredients</span>
+        <span className="hint">used by “What can I cook?” — green means it's in your pantry</span>
+      </div>
+      <div className="ing-chips">
+        ${list.map((ing, i) => html`
+          <span key=${i} className=${"ing-chip" + (pantryHas(have, ing) ? " ing-have" : "")}>
+            ${ing}
+            <button onClick=${() => onChange(list.filter((_, j) => j !== i))}>✕</button>
+          </span>`)}
+        ${list.length === 0 && html`<span className="var-empty">None yet — add a few and this meal joins the suggestions.</span>`}
+      </div>
+      <div className="ing-add">
+        <input value=${draft} placeholder="add an ingredient, or paste a comma-separated list"
+          onChange=${(e) => setDraft(e.target.value)}
+          onKeyDown=${(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }} />
+        <button className="btn" onClick=${add}>Add</button>
+      </div>
     </div>`;
 }
 
 /* ------------------------------------------------------------------ */
 /*  Meal detail                                                        */
 /* ------------------------------------------------------------------ */
-function MealDetail({ meal, update, onDelete }) {
+function MealDetail({ meal, update, onDelete, have, onPasteRecipe }) {
   const [mode, setMode] = useState("view");
   const [tool, setTool] = useState("pen");
   const [color, setColor] = useState("#D8341F");
@@ -694,9 +848,23 @@ function MealDetail({ meal, update, onDelete }) {
   const [wheelOpen, setWheelOpen] = useState(false);
   const [busy, setBusy] = useState(0);
   const fileRef = useRef(null);
+  const pageRef = useRef(null);
+  const boardRef = useRef(null);
   const cascade = useRef(0);
-  const boardW = useRef(900);
   const mealId = meal.id;
+
+  /* Where a newly added thing should land: inside the dotted area, which is
+     measured against the meal page because that's the item coordinate space. */
+  const dropSpot = useCallback((w, h) => {
+    const board = boardRef.current;
+    const top = board ? board.offsetTop : 300;
+    const width = board ? board.offsetWidth : 900;
+    const n = (cascade.current = (cascade.current + 1) % 8);
+    return {
+      x: Math.max(8, Math.min(24 + n * 34, width - w - 8)),
+      y: top + 24 + n * 26,
+    };
+  }, []);
 
   const addImages = useCallback(async (files) => {
     const list = [...files].filter((f) => f.type.startsWith("image/"));
@@ -710,16 +878,15 @@ function MealDetail({ meal, update, onDelete }) {
         key = imgKey(mealId, itemId);
         pendingImages.add(key);
         await idb.put("images", blob, key);
-        const bw = boardW.current || 900;
-        const scale = Math.min(1, Math.min(260, bw - 32) / Math.max(w, h));
+        const boardW = boardRef.current ? boardRef.current.offsetWidth : 900;
+        const scale = Math.min(1, Math.min(260, boardW - 32) / Math.max(w, h));
         const iw = Math.round(w * scale), ih = Math.round(h * scale);
-        const n = (cascade.current = (cascade.current + 1) % 8);
+        const { x, y } = dropSpot(iw, ih);
         update((m) => ({
           ...m,
           items: [...m.items, {
             id: itemId, kind: "image", src: urlFor(key, blob),
-            x: Math.max(8, Math.min(24 + n * 34, bw - iw - 8)), y: 24 + n * 30,
-            w: iw, h: ih, parent: null,
+            x, y, w: iw, h: ih, parent: null,
           }],
         }));
       } catch { /* skip unreadable file */ }
@@ -728,7 +895,7 @@ function MealDetail({ meal, update, onDelete }) {
       finally { if (key) { const k = key; setTimeout(() => pendingImages.delete(k), 5000); } }
       setBusy((b) => b - 1);
     }
-  }, [update, mealId]);
+  }, [update, mealId, dropSpot]);
 
   useEffect(() => {
     const onPaste = (e) => {
@@ -740,16 +907,38 @@ function MealDetail({ meal, update, onDelete }) {
     return () => document.removeEventListener("paste", onPaste);
   }, [addImages]);
 
-  const addNote = () =>
-    update((m) => {
-      const w = Math.min(240, Math.max(140, (boardW.current || 900) - 48));
-      return { ...m, items: [...m.items, { id: uid(), kind: "note", x: 24, y: 40, w, h: 200, text: "", parent: null }] };
-    });
+  const addNote = () => update((m) => {
+    const boardW = boardRef.current ? boardRef.current.offsetWidth : 900;
+    const w = Math.min(240, Math.max(140, boardW - 48));
+    const { x, y } = dropSpot(w, 200);
+    return { ...m, items: [...m.items, { id: uid(), kind: "note", x, y, w, h: 200, text: "", parent: null }] };
+  });
+
+  const addTable = () => update((m) => {
+    const boardW = boardRef.current ? boardRef.current.offsetWidth : 900;
+    const w = Math.min(380, Math.max(220, boardW - 48));
+    const { x, y } = dropSpot(w, 190);
+    return {
+      ...m,
+      items: [...m.items, {
+        id: uid(), kind: "table", x, y, w, h: 190, parent: null,
+        title: "Times & temps",
+        headers: ["What", "°C", "Time"],
+        rows: [["", "", ""], ["", "", ""], ["", "", ""]],
+      }],
+    };
+  });
 
   const set = (k) => (e) => update((m) => ({ ...m, [k]: e.target.value }));
 
   return html`
-    <div className="detail">
+    <div className="detail" ref=${pageRef}
+      onDragOver=${(e) => { if (e.dataTransfer && e.dataTransfer.types.includes("Files")) e.preventDefault(); }}
+      onDrop=${(e) => {
+        if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
+        e.preventDefault();
+        addImages([...e.dataTransfer.files]);
+      }}>
       <div className="fields">
         <div className="f-name">
           <input className="name-input" value=${meal.name} onChange=${set("name")} placeholder="Meal name" />
@@ -781,6 +970,9 @@ function MealDetail({ meal, update, onDelete }) {
           </label>
           <button className="btn btn-danger" onClick=${onDelete}>Delete meal</button>
         </div>
+
+        <${Ingredients} list=${meal.ingredients || []} have=${have}
+          onChange=${(ingredients) => update((m) => ({ ...m, ingredients }))} />
 
         <div className="variants">
           <div className="var-head">
@@ -843,9 +1035,11 @@ function MealDetail({ meal, update, onDelete }) {
         <input ref=${fileRef} type="file" accept="image/*" multiple style=${{ display: "none" }}
           onChange=${(e) => { addImages([...e.target.files]); e.target.value = ""; }} />
         <button className="btn" onClick=${addNote}>+ Notepad</button>
+        <button className="btn" onClick=${addTable}>+ Table</button>
+        <button className="btn" onClick=${onPasteRecipe}>⎘ Paste a recipe</button>
         ${busy > 0
           ? html`<span className="hint">adding ${busy} photo${busy > 1 ? "s" : ""}…</span>`
-          : html`<span className="hint">…or paste / drop an image on this page</span>`}
+          : html`<span className="hint">…or paste / drop an image anywhere on this page</span>`}
 
         ${mode === "draw" && html`
           <div className="draw-tools">
@@ -866,16 +1060,475 @@ function MealDetail({ meal, update, onDelete }) {
               </div>`}
           </div>`}
         ${mode === "arrange" && html`
-          <span className="hint">drag anything · corner handle resizes · drop images onto a notepad and they stick to it</span>`}
+          <span className="hint">drag anything anywhere on the page · corner handle resizes · drop onto a notepad and it sticks</span>`}
+        ${mode === "view" && html`
+          <span className="hint">switch to Arrange to move photos, pads and tables around the page</span>`}
       </div>
 
-      <${MealBoard} meal=${meal} mode=${mode} draw=${{ tool, color, size }} update=${update}
-        onDropImage=${addImages} sizeRef=${boardW} />
-      <button className="btn btn-ghost" onClick=${() => update((m) => ({ ...m, boardH: m.boardH + 320 }))}>+ more board space</button>
+      <div ref=${boardRef} className="board" style=${{ height: meal.boardH }}>
+        ${meal.items.length === 0 && meal.strokes.length === 0 && html`
+          <div className="board-empty">Paste, drop or upload photos, add a notepad or a table, or switch to Draw.
+            In Arrange mode you can drag any of it anywhere on this page — including over the fields above.</div>`}
+      </div>
+      <button className="btn btn-ghost" onClick=${() => update((m) => ({ ...m, boardH: m.boardH + 320 }))}>+ more space</button>
 
       <h3 className="sec-h">Instructions</h3>
       <textarea className="instructions" value=${meal.instructions} onChange=${set("instructions")}
         placeholder=${"1. …\n2. …"} />
+
+      <${PageCanvas} meal=${meal} mode=${mode} draw=${{ tool, color, size }} update=${update} pageRef=${pageRef} />
+    </div>`;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Paste-a-recipe                                                     */
+/* ------------------------------------------------------------------ */
+function RecipePaste({ onClose, onCreate, onFill, openMealName }) {
+  const [text, setText] = useState("");
+  const [parsed, setParsed] = useState(null);
+  const taRef = useRef(null);
+
+  useEffect(() => { if (taRef.current) taRef.current.focus(); }, []);
+
+  const run = () => {
+    const p = RecipeParser.parseRecipe(text);
+    if (!p) return;
+    setParsed(p);
+  };
+  const patch = (k, v) => setParsed((p) => ({ ...p, [k]: v }));
+
+  return html`
+    <div className="modal-back" onPointerDown=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal">
+        <div className="modal-head">
+          <h3>Paste a recipe</h3>
+          <button className="mini-x" onClick=${onClose}>✕</button>
+        </div>
+
+        ${!parsed ? html`
+          <${Frag}>
+            <p className="sub">
+              Copy the recipe text from the page you're reading and paste it here — the whole lot,
+              headings and all. This works offline by spotting patterns, not by understanding the
+              recipe, so check what it worked out before you keep it. Pasting a <b>link</b> won't
+              work; browsers don't let one site read another.
+            </p>
+            <textarea ref=${taRef} className="paste-box" value=${text} placeholder=${"Paste the recipe here…"}
+              onChange=${(e) => setText(e.target.value)} />
+            <div className="modal-btns">
+              <button className="btn btn-primary" disabled=${!text.trim()} onClick=${run}>Sort it out →</button>
+              <button className="btn" onClick=${onClose}>Cancel</button>
+            </div>
+          <//>`
+        : html`
+          <${Frag}>
+            <p className="sub">
+              Here's what it made of that${parsed.usedHeadings ? " — it found proper Ingredients/Method headings, so this should be close" : " — no headings found, so it guessed line by line; check it carefully"}.
+              Everything below is editable.
+            </p>
+            <div className="rp-grid">
+              <label>Name<input value=${parsed.name} onChange=${(e) => patch("name", e.target.value)} /></label>
+              <label>Type
+                <select value=${parsed.mealType} onChange=${(e) => patch("mealType", e.target.value)}>
+                  ${MEAL_TYPES.map((t) => html`<option key=${t} value=${t}>${t}</option>`)}
+                </select>
+              </label>
+              <label>Device
+                <select value=${parsed.device} onChange=${(e) => patch("device", e.target.value)}>
+                  ${DEVICES.map((t) => html`<option key=${t} value=${t}>${t}</option>`)}
+                </select>
+              </label>
+              <label>Prep time
+                <span className="unit-wrap">
+                  <input type="number" min="1" value=${parsed.prepTime}
+                    onChange=${(e) => patch("prepTime", Math.max(1, +e.target.value || 1))} /> min
+                </span>
+              </label>
+              <label>Temperature
+                <span className="unit-wrap">
+                  <input type="number" placeholder="—" value=${parsed.temp ?? ""}
+                    onChange=${(e) => patch("temp", e.target.value === "" ? null : +e.target.value)} /> °C
+                  ${parsed.tempFrom === "F" && html`<span className="hint">converted from °F</span>`}
+                  ${parsed.tempFrom === "gas" && html`<span className="hint">from gas mark</span>`}
+                </span>
+              </label>
+              ${parsed.servings && html`<label>Serves<input readOnly value=${parsed.servings} /></label>`}
+            </div>
+
+            <div className="rp-cols">
+              <div>
+                <div className="fg-label">Ingredients (${parsed.ingredients.length})</div>
+                <textarea className="rp-list" value=${parsed.ingredients.join("\n")}
+                  onChange=${(e) => patch("ingredients", e.target.value.split("\n").map((s) => s.trim()).filter(Boolean))} />
+              </div>
+              <div>
+                <div className="fg-label">Steps (${parsed.steps.length})</div>
+                <textarea className="rp-list" value=${parsed.steps.join("\n")}
+                  onChange=${(e) => patch("steps", e.target.value.split("\n").map((s) => s.trim()).filter(Boolean))} />
+              </div>
+            </div>
+            ${(!parsed.ingredients.length || !parsed.steps.length) && html`
+              <div className="rp-warn">
+                ${!parsed.ingredients.length ? "No ingredients were recognised. " : ""}
+                ${!parsed.steps.length ? "No steps were recognised. " : ""}
+                Move lines between the two boxes above, or go back and paste a bit more of the page.
+              </div>`}
+
+            <div className="modal-btns">
+              <button className="btn btn-primary" onClick=${() => onCreate(parsed)}>Create a new meal</button>
+              ${openMealName && html`
+                <button className="btn" onClick=${() => onFill(parsed)}>Fill “${openMealName}” instead</button>`}
+              <button className="btn" onClick=${() => setParsed(null)}>← Back to the text</button>
+              <button className="btn" onClick=${onClose}>Cancel</button>
+            </div>
+          <//>`}
+      </div>
+    </div>`;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Temps & times                                                      */
+/* ------------------------------------------------------------------ */
+const cell = (v) => (v ? (v[0] ? v[0] + " °C · " + v[1] : v[1]) : "—");
+
+function TempsTab({ meals, onInsert, customTemps, setCustomTemps }) {
+  const [q, setQ] = useState("");
+  const [target, setTarget] = useState("");
+  const [draft, setDraft] = useState({ food: "", oven: "", air: "", pan: "" });
+
+  const needle = q.trim().toLowerCase();
+  const groups = window.COOK_TEMPS
+    .map((g) => ({ ...g, rows: g.rows.filter((r) => !needle || r.food.toLowerCase().includes(needle)) }))
+    .filter((g) => g.rows.length);
+
+  const insertRows = (title, rows) => {
+    if (!target) return;
+    onInsert(target, {
+      title,
+      headers: ["Food", "Oven", "Air fryer", "Pan / hob"],
+      rows: rows.map((r) => [r.food, cell(r.oven), cell(r.air), cell(r.pan)]),
+    });
+  };
+
+  const addCustom = () => {
+    if (!draft.food.trim()) return;
+    setCustomTemps([...customTemps, { ...draft, id: uid() }]);
+    setDraft({ food: "", oven: "", air: "", pan: "" });
+  };
+
+  return html`
+    <div>
+      <h3 className="sec-h">Temps & times</h3>
+      <p className="sub">
+        Everything in °C, for a preheated oven or air fryer. Times suit an average-sized piece of
+        whatever it is — treat them as a solid starting point and write your own version underneath
+        once you know better. Fan ovens: knock about 20 °C off.
+      </p>
+
+      <div className="temp-controls">
+        <input className="temp-search" value=${q} placeholder="search foods…" onChange=${(e) => setQ(e.target.value)} />
+        <label className="sortsel">Insert into
+          <select value=${target} onChange=${(e) => setTarget(e.target.value)}>
+            <option value="">— pick a meal —</option>
+            ${meals.map((m) => html`<option key=${m.id} value=${m.id}>${m.name}</option>`)}
+          </select>
+        </label>
+        ${!meals.length && html`<span className="hint">create a meal first to insert tables into it</span>`}
+      </div>
+
+      ${groups.map((g) => html`
+        <div key=${g.group} className="panel temp-panel">
+          <div className="temp-head">
+            <h4>${g.group}</h4>
+            <button className="btn btn-ghost" disabled=${!target}
+              onClick=${() => insertRows(g.group + " — times & temps", g.rows)}>insert this table</button>
+          </div>
+          <div className="table-scroll">
+            <table className="temp-table">
+              <thead><tr><th>Food</th><th>Oven</th><th>Air fryer</th><th>Pan / hob</th><th></th></tr></thead>
+              <tbody>
+                ${g.rows.map((r) => html`
+                  <tr key=${r.food}>
+                    <td className="tt-food">${r.food}</td>
+                    <td>${cell(r.oven)}</td>
+                    <td>${cell(r.air)}</td>
+                    <td>${cell(r.pan)}</td>
+                    <td className="tt-ins">
+                      <button title="Insert just this row" disabled=${!target}
+                        onClick=${() => insertRows(r.food, [r])}>insert</button>
+                    </td>
+                  </tr>`)}
+              </tbody>
+            </table>
+          </div>
+        </div>`)}
+      ${!groups.length && html`<p className="sub">Nothing matches “${q}”.</p>`}
+
+      <h3 className="sec-h">Your own</h3>
+      <div className="panel temp-panel">
+        <div className="table-scroll">
+          <table className="temp-table">
+            <thead><tr><th>Food</th><th>Oven</th><th>Air fryer</th><th>Pan / hob</th><th></th></tr></thead>
+            <tbody>
+              ${customTemps.map((r, i) => html`
+                <tr key=${r.id}>
+                  ${["food", "oven", "air", "pan"].map((k) => html`
+                    <td key=${k}>
+                      <input value=${r[k] || ""}
+                        onChange=${(e) => setCustomTemps(customTemps.map((x, j) => (j === i ? { ...x, [k]: e.target.value } : x)))} />
+                    </td>`)}
+                  <td className="tt-ins">
+                    <button onClick=${() => setCustomTemps(customTemps.filter((_, j) => j !== i))}>remove</button>
+                  </td>
+                </tr>`)}
+              <tr>
+                ${["food", "oven", "air", "pan"].map((k) => html`
+                  <td key=${k}>
+                    <input value=${draft[k]} placeholder=${k === "food" ? "food…" : "200 °C · 20 min"}
+                      onChange=${(e) => setDraft({ ...draft, [k]: e.target.value })}
+                      onKeyDown=${(e) => { if (e.key === "Enter") addCustom(); }} />
+                  </td>`)}
+                <td className="tt-ins"><button onClick=${addCustom}>add</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        ${customTemps.length > 0 && target && html`
+          <button className="btn btn-ghost"
+            onClick=${() => insertRows("My times & temps", customTemps.map((r) => ({
+              food: r.food, oven: [null, r.oven], air: [null, r.air], pan: [null, r.pan],
+            })))}>insert my table</button>`}
+      </div>
+
+      <h3 className="sec-h">Cooked all the way through</h3>
+      <p className="sub">Internal temperature at the thickest part. The poultry, pork and mince rows are the ones that matter for safety.</p>
+      <div className="panel temp-panel">
+        <div className="table-scroll">
+          <table className="temp-table">
+            <thead><tr><th>Food</th><th>Internal</th><th></th></tr></thead>
+            <tbody>
+              ${window.DONENESS.map((d) => html`
+                <tr key=${d.food}><td className="tt-food">${d.food}</td><td><b>${d.temp}</b></td><td className="tt-note">${d.note}</td></tr>`)}
+            </tbody>
+          </table>
+        </div>
+        <button className="btn btn-ghost" disabled=${!target}
+          onClick=${() => onInsert(target, {
+            title: "Cooked-through temperatures",
+            headers: ["Food", "Internal", "Note"],
+            rows: window.DONENESS.map((d) => [d.food, d.temp, d.note]),
+          })}>insert this table</button>
+      </div>
+    </div>`;
+}
+
+/* ------------------------------------------------------------------ */
+/*  What can I cook?                                                   */
+/* ------------------------------------------------------------------ */
+function PantryTab({ meals, pantry, setPantry, onOpen, onAddStarter }) {
+  const [tab, setTab] = useState("suggest");
+  const [draft, setDraft] = useState("");
+  const [onlyComplete, setOnlyComplete] = useState(false);
+
+  const have = useMemo(() => {
+    const s = new Set();
+    for (const k of Object.keys(pantry.have || {})) if (pantry.have[k]) matchKeys(k).forEach((x) => s.add(x));
+    return s;
+  }, [pantry]);
+
+  /* Functional updates throughout: ticking several things quickly must not have
+     each click overwrite the one before it from a stale copy of the pantry. */
+  const toggle = (name) => setPantry((p) => ({ ...p, have: { ...p.have, [name]: !p.have[name] } }));
+  const addCustom = () => {
+    const parts = draft.split(",").map((s) => s.trim()).filter(Boolean);
+    if (!parts.length) return;
+    setPantry((p) => {
+      const haveNext = { ...p.have };
+      parts.forEach((x) => { haveNext[x] = true; });
+      return { ...p, custom: [...new Set([...(p.custom || []), ...parts])], have: haveNext };
+    });
+    setDraft("");
+  };
+  const removeCustom = (name) => setPantry((p) => {
+    const haveNext = { ...p.have }; delete haveNext[name];
+    return { ...p, custom: (p.custom || []).filter((c) => c !== name), have: haveNext };
+  });
+
+  const haveCount = Object.values(pantry.have || {}).filter(Boolean).length;
+
+  const suggestions = useMemo(() => {
+    const mine = meals
+      .filter((m) => (m.ingredients || []).length)
+      .map((m) => ({ id: m.id, name: m.name, mealType: m.mealType, device: m.device, prepTime: m.prepTime,
+        rating: m.rating, ingredients: m.ingredients, mine: true }));
+    const pool = [...mine, ...window.STARTER_MEALS.map((r) => ({ ...r, mine: false }))];
+    return pool
+      .map((r) => ({ recipe: r, score: scoreRecipe(r, have) }))
+      .filter((x) => x.score)
+      .filter((x) => !onlyComplete || x.score.missing.length === 0)
+      .sort((a, b) =>
+        a.score.missing.length - b.score.missing.length ||
+        b.score.pct - a.score.pct ||
+        (b.recipe.rating || 0) - (a.recipe.rating || 0))
+      .slice(0, 40);
+  }, [meals, have, onlyComplete]);
+
+  const canCookNow = suggestions.filter((s) => s.score.missing.length === 0).length;
+
+  return html`
+    <div>
+      <div className="pantry-tabs">
+        <button className=${tab === "suggest" ? "seg-on" : ""} onClick=${() => setTab("suggest")}>Suggest a meal</button>
+        <button className=${tab === "pantry" ? "seg-on" : ""} onClick=${() => setTab("pantry")}>My pantry (${haveCount})</button>
+      </div>
+
+      ${tab === "pantry" ? html`
+        <${Frag}>
+          <h3 className="sec-h">What have you got in?</h3>
+          <p className="sub">Tick everything you have. Salt, pepper, oil, flour, sugar, onion and garlic are assumed — no need to tick those unless you like.</p>
+          <div className="pantry-add">
+            <input value=${draft} placeholder="add your own — comma-separated is fine"
+              onChange=${(e) => setDraft(e.target.value)}
+              onKeyDown=${(e) => { if (e.key === "Enter") { e.preventDefault(); addCustom(); } }} />
+            <button className="btn btn-primary" onClick=${addCustom}>Add</button>
+            ${haveCount > 0 && html`
+              <button className="btn" onClick=${() => setPantry((p) => ({ ...p, have: {} }))}>Untick everything</button>`}
+          </div>
+          ${(pantry.custom || []).length > 0 && html`
+            <div className="fgroup">
+              <span className="fg-label">Mine</span>
+              ${(pantry.custom || []).map((c) => html`
+                <span key=${c} className=${"ing-chip" + (pantry.have[c] ? " ing-have" : "")}>
+                  <button className="ing-tog" onClick=${() => toggle(c)}>${pantry.have[c] ? "✓ " : ""}${c}</button>
+                  <button onClick=${() => removeCustom(c)}>✕</button>
+                </span>`)}
+            </div>`}
+          ${window.PANTRY_GROUPS.map((g) => html`
+            <div key=${g.group} className="fgroup pantry-group">
+              <span className="fg-label">${g.group}</span>
+              ${g.items.map((i) => html`
+                <${Chip} key=${i} active=${!!pantry.have[i]} onClick=${() => toggle(i)}>${i}<//>`)}
+            </div>`)}
+        <//>`
+      : html`
+        <${Frag}>
+          <h3 className="sec-h">What can I cook?</h3>
+          ${haveCount === 0 ? html`
+            <p className="sub">
+              Your pantry is empty, so this is showing everything. Open <b>My pantry</b> and tick what you
+              actually have — then this list reorders itself around what you can cook right now.
+            </p>`
+          : html`
+            <p className="sub">
+              Based on ${haveCount} thing${haveCount === 1 ? "" : "s"} in your pantry.
+              ${canCookNow > 0 ? " You can cook " + canCookNow + " of these right now." : " Nothing's a complete match yet — the closest are first."}
+            </p>`}
+          <div className="fgroup" style=${{ marginBottom: 10 }}>
+            <${Chip} active=${onlyComplete} onClick=${() => setOnlyComplete((v) => !v)}>Only what I can cook now<//>
+          </div>
+
+          ${suggestions.length === 0 && html`
+            <p className="sub">Nothing to suggest yet. Add ingredients to your own meals, or untick the filter above.</p>`}
+
+          <div className="sugg-list">
+            ${suggestions.map(({ recipe, score }) => html`
+              <div key=${recipe.id} className=${"sugg" + (score.missing.length === 0 ? " sugg-ready" : "")}>
+                <div className="sugg-top">
+                  <span className="sugg-name">${recipe.name}</span>
+                  <span className=${"sugg-pct" + (score.missing.length === 0 ? " pct-full" : "")}>${score.pct}%</span>
+                </div>
+                <div className="card-meta">
+                  ${recipe.mealType} · ${recipe.device} · ${recipe.prepTime} min
+                  ${recipe.mine ? html`<span className="var-tag"> · your meal</span>` : html`<span className="hint"> · built-in recipe</span>`}
+                </div>
+                ${score.missing.length === 0
+                  ? html`<div className="sugg-ok">You have everything.</div>`
+                  : html`<div className="sugg-miss">Missing: ${score.missing.join(", ")}</div>`}
+                <div className="sugg-btns">
+                  ${recipe.mine
+                    ? html`<button className="btn btn-ghost" onClick=${() => onOpen(recipe.id)}>Open meal →</button>`
+                    : html`<button className="btn btn-ghost" onClick=${() => onAddStarter(recipe)}>Add to my meals →</button>`}
+                </div>
+              </div>`)}
+          </div>
+        <//>`}
+    </div>`;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Backups                                                            */
+/* ------------------------------------------------------------------ */
+function BackupsPanel({ backups, onCreate, onRestore, onDelete, busy }) {
+  const [code, setCode] = useState("");
+  const [confirm, setConfirm] = useState(null);
+
+  const when = (t) => {
+    const d = new Date(t);
+    return d.toLocaleDateString() + " " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  };
+  const byCode = () => {
+    const c = code.trim();
+    const hit = backups.find((b) => b.code === c);
+    if (!hit) return;
+    setConfirm(hit); setCode("");
+  };
+
+  return html`
+    <div className="panel cloud">
+      <div className="cloud-head">Backups in this browser</div>
+      <p className="sub" style=${{ margin: "0 0 8px" }}>
+        Snapshots kept alongside your cookbook — each one gets a 4-digit code. They cost almost nothing
+        because they share photos with your meals, but they live in the same browser, so a
+        <b> downloaded backup file</b> is still the one that survives anything.
+      </p>
+      <div className="store-btns" style=${{ marginLeft: 0, marginBottom: 10 }}>
+        <button className="btn btn-primary" disabled=${busy} onClick=${onCreate}>Create a backup now</button>
+        <span className="code-entry">
+          <input value=${code} inputMode="numeric" maxLength="4" placeholder="code"
+            onChange=${(e) => setCode(e.target.value.replace(/\D/g, ""))}
+            onKeyDown=${(e) => { if (e.key === "Enter") byCode(); }} />
+          <button className="btn" disabled=${code.trim().length !== 4} onClick=${byCode}>Restore by code</button>
+        </span>
+      </div>
+
+      ${backups.length === 0
+        ? html`<p className="sub" style=${{ margin: 0 }}>No snapshots yet. One is taken automatically the first time you save on a new day.</p>`
+        : html`
+          <div className="table-scroll">
+            <table className="bk-table">
+              <thead><tr><th>Code</th><th>Taken</th><th>Meals</th><th>Photos</th><th>Why</th><th></th></tr></thead>
+              <tbody>
+                ${backups.map((b) => html`
+                  <tr key=${b.code}>
+                    <td><span className="bk-code">${b.code}</span></td>
+                    <td>${when(b.at)}</td>
+                    <td>${b.mealCount}</td>
+                    <td>${b.photoCount}</td>
+                    <td className="tt-note">${b.label || "manual"}</td>
+                    <td className="tt-ins">
+                      <button onClick=${() => setConfirm(b)}>restore</button>
+                      <button onClick=${() => onDelete(b.code)}>delete</button>
+                    </td>
+                  </tr>`)}
+              </tbody>
+            </table>
+          </div>`}
+
+      ${confirm && html`
+        <div className="modal-back" onPointerDown=${(e) => { if (e.target === e.currentTarget) setConfirm(null); }}>
+          <div className="modal modal-sm">
+            <div className="modal-head"><h3>Restore backup ${confirm.code}?</h3></div>
+            <p className="sub">
+              ${"This replaces your current cookbook with the " + confirm.mealCount +
+                (confirm.mealCount === 1 ? " meal" : " meals") + " saved on " + when(confirm.at) + ". "}
+              A snapshot of what you have right now is taken first, so this is reversible.
+            </p>
+            <div className="modal-btns">
+              <button className="btn btn-primary" onClick=${() => { const c = confirm; setConfirm(null); onRestore(c); }}>Restore it</button>
+              <button className="btn" onClick=${() => setConfirm(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>`}
     </div>`;
 }
 
@@ -936,7 +1589,7 @@ function CloudPanel({ user, onSignIn, onSignUp, onSignOut, onSyncNow, syncing, l
 }
 
 /* ------------------------------------------------------------------ */
-/*  Overview tab (storage + search)                                    */
+/*  Overview tab                                                       */
 /* ------------------------------------------------------------------ */
 function Overview(props) {
   const { meals, status, onSave, onLoad, onBackup, onRestoreFile, onOpen, onFav, usage } = props;
@@ -976,6 +1629,7 @@ function Overview(props) {
         ${status && html`<div className="status">${status}</div>`}
       </div>
 
+      <${BackupsPanel} ...${props.backupsPanel} />
       <${CloudPanel} ...${props.cloud} />
 
       <h3 className="sec-h">Search by category</h3>
@@ -1013,7 +1667,7 @@ function Overview(props) {
 /* ------------------------------------------------------------------ */
 /*  Meals list tab                                                     */
 /* ------------------------------------------------------------------ */
-function MealsTab({ meals, onOpen, onFav, onNew }) {
+function MealsTab({ meals, onOpen, onFav, onNew, onPasteRecipe }) {
   const [sort, setSort] = useState("newest");
   const [typeF, setTypeF] = useState([]);
   const [devF, setDevF] = useState([]);
@@ -1042,6 +1696,7 @@ function MealsTab({ meals, onOpen, onFav, onNew }) {
     <div>
       <div className="list-controls">
         <button className="btn btn-primary" onClick=${onNew}>+ New meal</button>
+        <button className="btn" onClick=${onPasteRecipe}>⎘ Paste a recipe</button>
         <label className="sortsel">Sort / group
           <select value=${sort} onChange=${(e) => setSort(e.target.value)}>
             <option value="newest">Newest first</option>
@@ -1076,7 +1731,7 @@ function MealsTab({ meals, onOpen, onFav, onNew }) {
 /* ------------------------------------------------------------------ */
 function CookingOrganizer() {
   const [meals, setMeals] = useState([]);
-  const [tab, setTab] = useState("overview"); // 'overview' | 'meals' | meal id
+  const [tab, setTab] = useState("overview"); // overview | meals | pantry | temps | <meal id>
   const [status, setStatus] = useState("");
   const [dirty, setDirty] = useState(false);
   const [ready, setReady] = useState(false);
@@ -1085,15 +1740,24 @@ function CookingOrganizer() {
   const [user, setUser] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [lastSync, setLastSync] = useState("");
+  const [backups, setBackups] = useState([]);
+  const [pantry, setPantryState] = useState({ have: {}, custom: [] });
+  const [customTemps, setCustomTempsState] = useState([]);
+  const [pasteOpen, setPasteOpen] = useState(false);
   const savedIds = useRef([]);
-  const deletions = useRef({});   // { mealId: deletedAt }
+  const deletions = useRef({});
   const autoTimer = useRef(null);
   const mealsRef = useRef(meals);
   mealsRef.current = meals;
 
   const flash = (msg) => { setStatus(msg); setTimeout(() => setStatus((s) => (s === msg ? "" : s)), 4000); };
 
-  /* ---------- how much space the cookbook takes ---------- */
+  const haveSet = useMemo(() => {
+    const s = new Set();
+    for (const k of Object.keys(pantry.have || {})) if (pantry.have[k]) matchKeys(k).forEach((x) => s.add(x));
+    return s;
+  }, [pantry]);
+
   const refreshUsage = useCallback(async () => {
     try {
       if (navigator.storage && navigator.storage.estimate) {
@@ -1105,6 +1769,13 @@ function CookingOrganizer() {
       }
     } catch { /* estimate unsupported */ }
     setUsage("—");
+  }, []);
+
+  const refreshBackups = useCallback(async () => {
+    try {
+      const all = await idb.getAll("backups");
+      setBackups(all.sort((a, b) => b.at - a.at));
+    } catch { setBackups([]); }
   }, []);
 
   /* ---------- load ---------- */
@@ -1133,13 +1804,17 @@ function CookingOrganizer() {
         if (s && s.theme && FRAMES[s.theme]) setTheme(s.theme);
       } catch { /* no settings yet */ }
       try { deletions.current = (await idb.get("meta", "deletions")) || {}; } catch { /* none */ }
+      try {
+        const p = await idb.get("meta", "pantry");
+        if (p && p.have) setPantryState({ have: p.have || {}, custom: p.custom || [] });
+      } catch { /* none */ }
+      try { setCustomTempsState((await idb.get("meta", "customTemps")) || []); } catch { /* none */ }
       await loadAll();
-      // Ask the browser not to evict the cookbook when disk gets tight.
+      await refreshBackups();
       try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch { /* unsupported */ }
     })().finally(() => setReady(true));
-  }, [loadAll]);
+  }, [loadAll, refreshBackups]);
 
-  /* ---------- restore a Supabase session on start ---------- */
   useEffect(() => {
     if (!Sync.configured()) return;
     const supa = Sync.init();
@@ -1159,6 +1834,23 @@ function CookingOrganizer() {
     idb.put("meta", { theme: t }, "settings").catch(() => { });
     if (Sync.user) Sync.setMeta("settings", { theme: t }).catch(() => { });
   };
+  /* These two are passed straight down so callers can use functional updates —
+     ticking several pantry items quickly must not clobber earlier ticks.
+     Persistence rides on an effect rather than the setter for the same reason. */
+  const setPantry = setPantryState;
+  const setCustomTemps = setCustomTempsState;
+
+  useEffect(() => {
+    if (!ready) return;
+    idb.put("meta", pantry, "pantry").catch(() => { });
+    if (Sync.user) Sync.setMeta("pantry", pantry).catch(() => { });
+  }, [pantry, ready]);
+
+  useEffect(() => {
+    if (!ready) return;
+    idb.put("meta", customTemps, "customTemps").catch(() => { });
+    if (Sync.user) Sync.setMeta("customTemps", customTemps).catch(() => { });
+  }, [customTemps, ready]);
 
   /* ---------- save ---------- */
   const saveAll = useCallback(async (quiet) => {
@@ -1170,11 +1862,23 @@ function CookingOrganizer() {
       await idb.put("meta", { ids: list.map((m) => m.id), at: Date.now() }, "index");
       await idb.put("meta", deletions.current, "deletions");
 
-      // Sweep photos that no meal references any more.
+      /* One automatic snapshot per day, taken on the first save of that day. */
+      const lastDay = await idb.get("meta", "lastAutoBackup");
+      const today = new Date().toISOString().slice(0, 10);
+      if (list.length && lastDay !== today) {
+        try {
+          await createBackup(list, "automatic");
+          await idb.put("meta", today, "lastAutoBackup");
+          refreshBackups();
+        } catch { /* a failed snapshot must never block the save */ }
+      }
+
+      /* Sweep photos nothing points at any more — meals, in-flight writes and
+         every stored snapshot all count as "pointing at". */
       const live = new Set();
       for (const m of list) for (const it of m.items) if (it.kind === "image") live.add(imgKey(m.id, it.id));
-      const keys = await idb.keys("images");
-      for (const k of keys) {
+      for (const b of await idb.getAll("backups")) for (const k of b.imageKeys || []) live.add(k);
+      for (const k of await idb.keys("images")) {
         if (live.has(k) || pendingImages.has(k)) continue;
         await idb.del("images", k); dropUrl(k);
       }
@@ -1186,9 +1890,8 @@ function CookingOrganizer() {
     } catch {
       if (!quiet) flash("Couldn't save to this browser's storage — use Download backup to keep a copy.");
     }
-  }, [refreshUsage]);
+  }, [refreshUsage, refreshBackups]);
 
-  // Autosave: any change is written to storage after a short pause.
   useEffect(() => {
     if (!ready || !dirty) return;
     clearTimeout(autoTimer.current);
@@ -1196,9 +1899,10 @@ function CookingOrganizer() {
     return () => clearTimeout(autoTimer.current);
   }, [ready, dirty, meals, saveAll]);
 
-  /* ---------- backup ---------- */
-  /* Format is identical to the artifact's: photos are inlined as data URLs,
-     so a file from either version restores into either version. */
+  /* ---------- backup file ---------- */
+  /* Format stays exactly as the original artifact wrote it — photos inlined as
+     data URLs — so files move between the two versions. Pantry and custom temps
+     ride along as extra top-level keys the old version simply ignores. */
   const backup = async () => {
     flash("Preparing backup…");
     const out = [];
@@ -1216,7 +1920,8 @@ function CookingOrganizer() {
       }
       out.push({ ...m, items });
     }
-    const blob = new Blob([JSON.stringify({ app: "cooking-organizer", exported: Date.now(), meals: out }, null, 1)], { type: "application/json" });
+    const payload = { app: "cooking-organizer", exported: Date.now(), meals: out, pantry, customTemps };
+    const blob = new Blob([JSON.stringify(payload, null, 1)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = "cookbook-backup-" + new Date().toISOString().slice(0, 10) + ".json";
@@ -1233,7 +1938,10 @@ function CookingOrganizer() {
         if (!Array.isArray(data.meals)) throw new Error("not a cookbook backup");
         const restored = [];
         for (const raw of data.meals) {
-          const m = { ...raw, id: raw.id || uid(), items: raw.items || [], strokes: raw.strokes || [], variants: raw.variants || [] };
+          const m = {
+            ...raw, id: raw.id || uid(), items: raw.items || [],
+            strokes: raw.strokes || [], variants: raw.variants || [], ingredients: raw.ingredients || [],
+          };
           const items = [];
           for (const it of m.items) {
             if (it.kind !== "image") { items.push(it); continue; }
@@ -1250,12 +1958,36 @@ function CookingOrganizer() {
           }
           restored.push({ ...m, items, modified: Date.now() });
         }
+        if (data.pantry && data.pantry.have) setPantry({ have: data.pantry.have, custom: data.pantry.custom || [] });
+        if (Array.isArray(data.customTemps)) setCustomTemps(data.customTemps);
         setMeals(restored);
         setDirty(true);
         flash("Backup loaded (" + restored.length + " meals) — press Save to keep it.");
       } catch { flash("That file doesn't look like a cookbook backup."); }
     };
     r.readAsText(file);
+  };
+
+  /* ---------- snapshots ---------- */
+  const makeSnapshot = async (label) => {
+    try {
+      await saveAll(true);
+      const code = await createBackup(mealsRef.current, label || "manual");
+      await refreshBackups();
+      return code;
+    } catch { flash("Couldn't create a snapshot."); return null; }
+  };
+  const restoreSnapshot = async (b) => {
+    try {
+      await createBackup(mealsRef.current, "before restoring " + b.code);
+      const restored = [];
+      for (const m of b.meals) restored.push(await hydrateMeal(m));
+      setMeals(restored);
+      setDirty(true);
+      await refreshBackups();
+      setTab("meals");
+      flash("Restored backup " + b.code + " (" + restored.length + " meals).");
+    } catch { flash("Couldn't restore that backup."); }
   };
 
   /* ---------- meal edits ---------- */
@@ -1276,6 +2008,64 @@ function CookingOrganizer() {
     setTab("meals");
   };
 
+  /* Drop a table onto a meal's page, below whatever is already there. */
+  const insertTable = (mealId, table) => {
+    const target = mealsRef.current.find((m) => m.id === mealId);
+    if (!target) return;
+    const lowest = target.items.reduce((y, it) => Math.max(y, it.y + it.h), 320);
+    updateMeal(mealId)((m) => ({
+      ...m,
+      boardH: Math.max(m.boardH, 640),
+      items: [...m.items, {
+        id: uid(), kind: "table", x: 24, y: lowest + 16,
+        w: Math.min(560, 120 + table.headers.length * 120),
+        h: Math.min(420, 90 + table.rows.length * 34),
+        parent: null, title: table.title, headers: table.headers, rows: table.rows,
+      }],
+    }));
+    flash("Added “" + table.title + "” to " + target.name + ".");
+  };
+
+  const mealFromRecipe = (p) => ({
+    ...newMeal(),
+    name: p.name, mealType: p.mealType, device: p.device,
+    prepTime: p.prepTime, ingredients: p.ingredients,
+    instructions: (p.temp ? "Oven / air fryer: " + p.temp + " °C\n\n" : "") + p.instructions,
+  });
+  const createFromRecipe = (p) => {
+    const m = mealFromRecipe(p);
+    setMeals((ms) => [...ms, m]);
+    setDirty(true);
+    setPasteOpen(false);
+    setTab(m.id);
+    flash("Created “" + m.name + "” — check it over.");
+  };
+  const fillFromRecipe = (p) => {
+    const open = mealsRef.current.find((m) => m.id === tab);
+    if (!open) return;
+    updateMeal(open.id)((m) => ({
+      ...m,
+      name: p.name || m.name, mealType: p.mealType, device: p.device, prepTime: p.prepTime,
+      ingredients: [...(m.ingredients || []), ...p.ingredients],
+      instructions: (m.instructions ? m.instructions + "\n\n" : "") +
+        (p.temp ? "Oven / air fryer: " + p.temp + " °C\n\n" : "") + p.instructions,
+    }));
+    setPasteOpen(false);
+    flash("Filled in “" + p.name + "”.");
+  };
+  const addStarter = (recipe) => {
+    const m = {
+      ...newMeal(),
+      name: recipe.name, mealType: recipe.mealType, device: recipe.device,
+      prepTime: recipe.prepTime, rating: recipe.rating,
+      ingredients: [...recipe.ingredients], instructions: recipe.instructions,
+    };
+    setMeals((ms) => [...ms, m]);
+    setDirty(true);
+    setTab(m.id);
+    flash("Added “" + m.name + "” to your meals.");
+  };
+
   /* ---------- cloud sync ---------- */
   const syncNow = useCallback(async () => {
     if (!Sync.user) return;
@@ -1283,7 +2073,6 @@ function CookingOrganizer() {
     try {
       await saveAll(true);
 
-      // 1. push our tombstones, and merge in anyone else's
       const remoteDel = (await Sync.getMeta("deletions")) || {};
       const mergedDel = { ...remoteDel, ...deletions.current };
       for (const id of Object.keys(deletions.current)) {
@@ -1291,30 +2080,25 @@ function CookingOrganizer() {
         await Sync.deleteMeal(id, local ? local.items : []);
       }
 
-      // 2. what does the cloud have?
       const { data: rows, error } = await Sync.supa.from("meals").select("id,modified");
       if (error) throw error;
       const remoteById = new Map((rows || []).map((r) => [r.id, r.modified]));
       const localById = new Map(mealsRef.current.map((m) => [m.id, m]));
 
-      // 3. push everything newer here (or missing there)
       const pushed = [];
       for (const m of mealsRef.current) {
         const rm = remoteById.get(m.id);
         if (rm === undefined || (m.modified || 0) > rm) pushed.push(await Sync.pushMeal(m));
       }
-      if (pushed.length) {
-        setMeals((ms) => ms.map((m) => pushed.find((p) => p.id === m.id) || m));
-      }
+      if (pushed.length) setMeals((ms) => ms.map((m) => pushed.find((p) => p.id === m.id) || m));
 
-      // 4. pull everything newer there (or missing here), skipping deleted meals
       const wanted = (rows || []).filter((r) => {
         if (mergedDel[r.id] && mergedDel[r.id] > r.modified) return false;
         const lm = localById.get(r.id);
         return !lm || r.modified > (lm.modified || 0);
       }).map((r) => r.id);
 
-      let pulled = [];
+      const pulled = [];
       if (wanted.length) {
         const { data: full, error: e2 } = await Sync.supa.from("meals").select("id,data,modified").in("id", wanted);
         if (e2) throw e2;
@@ -1333,9 +2117,9 @@ function CookingOrganizer() {
         });
       }
 
-      // 5. settings + tombstones back up
       deletions.current = mergedDel;
       await Sync.setMeta("deletions", mergedDel);
+
       const remoteSettings = await Sync.getMeta("settings");
       if (remoteSettings && remoteSettings.theme && FRAMES[remoteSettings.theme] && remoteSettings.theme !== theme) {
         setTheme(remoteSettings.theme);
@@ -1343,8 +2127,14 @@ function CookingOrganizer() {
       } else {
         await Sync.setMeta("settings", { theme });
       }
+      const remotePantry = await Sync.getMeta("pantry");
+      if (remotePantry && remotePantry.have && !Object.keys(pantry.have || {}).length) setPantry(remotePantry);
+      else await Sync.setMeta("pantry", pantry);
+      const remoteTemps = await Sync.getMeta("customTemps");
+      if (Array.isArray(remoteTemps) && remoteTemps.length && !customTemps.length) setCustomTemps(remoteTemps);
+      else await Sync.setMeta("customTemps", customTemps);
 
-      setDirty(true);            // persist whatever came down
+      setDirty(true);
       setLastSync(new Date().toLocaleTimeString());
       flash("Synced ✓ (" + pushed.length + " up, " + pulled.length + " down)");
     } catch (err) {
@@ -1353,9 +2143,8 @@ function CookingOrganizer() {
       setSyncing(false);
       refreshUsage();
     }
-  }, [saveAll, theme, refreshUsage]);
+  }, [saveAll, theme, pantry, customTemps, refreshUsage]);
 
-  // A first sync as soon as we know who you are.
   const syncedOnce = useRef(false);
   useEffect(() => {
     if (!ready || !user || syncedOnce.current) return;
@@ -1370,8 +2159,15 @@ function CookingOrganizer() {
     onSignOut: async () => { await Sync.signOut(); setUser(null); syncedOnce.current = false; },
     onSyncNow: syncNow,
   };
+  const backupsPanel = {
+    backups, busy: !ready,
+    onCreate: async () => { const c = await makeSnapshot("manual"); if (c) flash("Backup created — code " + c + "."); },
+    onRestore: restoreSnapshot,
+    onDelete: async (code) => { await idb.del("backups", code); await refreshBackups(); flash("Backup " + code + " deleted."); },
+  };
 
   const open = meals.find((m) => m.id === tab);
+  const TABS = [["overview", "Overview & search"], ["meals", "Meals"], ["pantry", "What can I cook?"], ["temps", "Temps & times"]];
 
   return html`
     <div className="app">
@@ -1379,8 +2175,8 @@ function CookingOrganizer() {
       <header className="top">
         <div className="brand">The Cookbook Board</div>
         <nav className="tabs">
-          <button className=${tab === "overview" ? "tab-on" : ""} onClick=${() => setTab("overview")}>Overview & search</button>
-          <button className=${tab === "meals" ? "tab-on" : ""} onClick=${() => setTab("meals")}>Meals</button>
+          ${TABS.map(([id, label]) => html`
+            <button key=${id} className=${tab === id ? "tab-on" : ""} onClick=${() => setTab(id)}>${label}</button>`)}
           ${open && html`<button className="tab-on tab-meal">${open.name || "Meal"}</button>`}
         </nav>
         <div className="top-right">
@@ -1400,20 +2196,39 @@ function CookingOrganizer() {
         ? html`
           <div className="page">
             <button className="btn btn-ghost back" onClick=${() => setTab("meals")}>← All meals</button>
-            <${MealDetail} meal=${open} update=${updateMeal(open.id)} onDelete=${() => deleteMeal(open.id)} />
+            <${MealDetail} meal=${open} update=${updateMeal(open.id)} onDelete=${() => deleteMeal(open.id)}
+              have=${haveSet} onPasteRecipe=${() => setPasteOpen(true)} />
           </div>`
         : tab === "meals"
         ? html`
           <div className="page">
-            <${MealsTab} meals=${meals} onOpen=${setTab} onFav=${toggleFav} onNew=${addMeal} />
+            <${MealsTab} meals=${meals} onOpen=${setTab} onFav=${toggleFav} onNew=${addMeal}
+              onPasteRecipe=${() => setPasteOpen(true)} />
+          </div>`
+        : tab === "pantry"
+        ? html`
+          <div className="page">
+            <${PantryTab} meals=${meals} pantry=${pantry} setPantry=${setPantry}
+              onOpen=${setTab} onAddStarter=${addStarter} />
+          </div>`
+        : tab === "temps"
+        ? html`
+          <div className="page">
+            <${TempsTab} meals=${meals} onInsert=${insertTable}
+              customTemps=${customTemps} setCustomTemps=${setCustomTemps} />
           </div>`
         : html`
           <div className="page">
-            <${Overview} meals=${meals} status=${status} usage=${usage} cloud=${cloud}
+            <${Overview} meals=${meals} status=${status} usage=${usage} cloud=${cloud} backupsPanel=${backupsPanel}
               onSave=${() => saveAll(false)} onBackup=${backup}
               onRestoreFile=${restoreFile} onOpen=${setTab} onFav=${toggleFav}
               onLoad=${async () => { const n = await loadAll(); flash(n ? "Restored last save (" + n + " meals)." : "No save found yet."); }} />
           </div>`}
+
+      ${pasteOpen && html`
+        <${RecipePaste} onClose=${() => setPasteOpen(false)}
+          onCreate=${createFromRecipe} onFill=${fillFromRecipe}
+          openMealName=${open ? open.name : null} />`}
 
       ${status && tab !== "overview" && html`<div className="toast">${status}</div>`}
     </div>`;

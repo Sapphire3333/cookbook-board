@@ -130,17 +130,26 @@ select,input[type=number]{border:1px solid var(--line-dark);border-radius:7px;pa
 .swatch-row{display:flex;gap:5px}
 .swatch{width:20px;height:20px;border-radius:5px;border:1px solid var(--line-dark);cursor:pointer}
 
-/* ---- the board ----
-   touch-action is the whole trick on a phone: the board scrolls the page
-   normally, but anything you can grab or draw on claims the gesture instead,
-   so a drag never turns into a page scroll. */
+/* ---- the meal page canvas ----
+   Photos, notepads and tables are positioned against the WHOLE meal page, not
+   a board box, so they can sit over the rating fields or beside the
+   instructions. The dotted area below is only a hint about where there's room.
+
+   touch-action is the whole trick on a phone: the page scrolls normally, but
+   anything you can grab or draw on claims the gesture instead, so a drag never
+   turns into a page scroll. */
+.detail{position:relative}
+.pagelayer{position:absolute;inset:0;z-index:30;pointer-events:none}
+.pagelayer-draw{pointer-events:auto;cursor:crosshair;touch-action:none}
+.pagelayer > *{pointer-events:auto}
+/* In View mode photos are just pictures — clicks pass through to the fields
+   underneath. Notepads and tables stay usable so you can type in them. */
+.pagelayer-view .bimg{pointer-events:none}
 .board{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:12px;
-  overflow:hidden;background-image:radial-gradient(var(--line) 1px,transparent 1px);background-size:22px 22px;
-  touch-action:pan-y;overscroll-behavior:contain}
-.board-draw{cursor:crosshair;touch-action:none}
+  background-image:radial-gradient(var(--line) 1px,transparent 1px);background-size:22px 22px}
 .board-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   color:var(--line-dark);font-size:14px;text-align:center;padding:20px;pointer-events:none}
-.strokes{position:absolute;inset:0;width:100%;height:100%;z-index:900}
+.strokes{position:absolute;inset:0;width:100%;height:100%;z-index:900;pointer-events:none;overflow:visible}
 .bimg{position:absolute;z-index:20;border-radius:8px;overflow:hidden;
   box-shadow:0 2px 8px rgba(31,36,25,.18);user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
 .bimg img{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
@@ -190,6 +199,115 @@ select,input[type=number]{border:1px solid var(--line-dark);border-radius:7px;pa
 .var-x{position:static;background:none;color:var(--muted);width:auto;height:auto}
 .var-tag{color:var(--herb-dark);font-weight:600}
 
+/* ---- ingredients ---- */
+.ing-block{margin-top:14px;border-top:1px dashed var(--line);padding-top:10px}
+.ing-chips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+.ing-chip{display:inline-flex;align-items:center;gap:5px;background:var(--bg);border:1px solid var(--line-dark);
+  border-radius:16px;padding:3px 6px 3px 11px;font-size:13px}
+.ing-chip.ing-have{background:#E7F1E4;border-color:#8FB58C;color:var(--herb-dark)}
+.ing-chip button{border:none;background:none;cursor:pointer;color:var(--muted);font-size:12px;padding:0 3px;line-height:1}
+.ing-chip .ing-tog{padding:0;color:inherit;font-size:13px}
+.ing-add{display:flex;gap:8px;flex-wrap:wrap}
+.ing-add input{flex:1;min-width:200px;border:1px solid var(--line-dark);border-radius:7px;padding:6px 10px;
+  font-size:14px;background:var(--panel);color:var(--ink)}
+
+/* ---- page tables ---- */
+.ptable{position:absolute;z-index:15;background:var(--panel);border:1px solid var(--line-dark);border-radius:8px;
+  box-shadow:0 3px 10px rgba(31,36,25,.18);display:flex;flex-direction:column;overflow:hidden}
+.ptable-arr{outline:2px dashed var(--herb);outline-offset:2px;touch-action:none}
+.ptable-bar{background:var(--herb);color:#fff;font-size:11px;padding:3px 6px;display:flex;
+  justify-content:space-between;align-items:center;cursor:grab;flex-shrink:0;gap:4px;touch-action:none}
+.ptable-title{flex:1;min-width:0;border:none;background:none;color:#fff;font:600 12px inherit;outline:none;padding:2px}
+.ptable-title::placeholder{color:#ffffffaa}
+.ptable-bar .mini-x{position:static;background:#ffffff33;width:18px;height:18px}
+.ptable-scroll{flex:1;overflow:auto;padding:2px}
+.ptable table{border-collapse:collapse;width:100%;font-size:12px}
+.ptable th{background:var(--bg);color:var(--muted);font-size:11px;text-align:left;padding:3px 5px;
+  border-bottom:1px solid var(--line);position:sticky;top:0}
+.ptable td{border-bottom:1px solid var(--line);padding:0}
+.ptable td input{width:100%;border:none;background:none;padding:4px 5px;font:12px inherit;color:var(--ink);outline:none}
+.ptable td input:focus{background:#FFF9E0}
+.ptable-del button,.ptable-add{border:none;background:none;color:var(--muted);cursor:pointer;font-size:11px;padding:3px 6px}
+.ptable-add{color:var(--herb-dark)}
+
+/* ---- temps & times ---- */
+.temp-controls{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+.temp-search{border:1px solid var(--line-dark);border-radius:7px;padding:7px 12px;font-size:14px;
+  background:var(--panel);color:var(--ink);min-width:200px;flex:1}
+.temp-panel{padding:12px 14px;margin-bottom:12px}
+.temp-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.temp-head h4{margin:0;font-family:Georgia,serif;font-size:15px;color:var(--herb-dark)}
+.temp-head .btn-ghost{margin-left:auto}
+.table-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.temp-table,.bk-table{border-collapse:collapse;width:100%;font-size:13px;min-width:520px}
+.temp-table th,.bk-table th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.5px;
+  color:var(--muted);padding:5px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+.temp-table td,.bk-table td{padding:5px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
+.temp-table tr:last-child td,.bk-table tr:last-child td{border-bottom:none}
+.tt-food{font-weight:600}
+.tt-note{color:var(--muted);font-size:12px}
+.tt-ins{text-align:right;white-space:nowrap}
+.tt-ins button{border:none;background:none;color:var(--herb-dark);cursor:pointer;font-size:12px;padding:2px 5px}
+.tt-ins button:hover{text-decoration:underline}
+.tt-ins button:disabled{color:var(--line-dark);cursor:default;text-decoration:none}
+.temp-table td input{width:100%;min-width:90px;border:1px solid transparent;border-radius:5px;
+  padding:3px 5px;font:13px inherit;background:var(--bg);color:var(--ink);outline:none}
+.temp-table td input:focus{border-color:var(--herb);background:var(--panel)}
+
+/* ---- backups ---- */
+.code-entry{display:flex;gap:6px;align-items:center}
+.code-entry input{width:76px;border:1px solid var(--line-dark);border-radius:7px;padding:7px 10px;
+  font:600 15px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:2px;text-align:center;
+  background:var(--panel);color:var(--ink)}
+.bk-code{font:700 15px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:2px;
+  background:var(--bg);border:1px solid var(--line-dark);border-radius:6px;padding:3px 8px;display:inline-block}
+
+/* ---- what can I cook ---- */
+.pantry-tabs{display:flex;border:1px solid var(--line-dark);border-radius:9px;overflow:hidden;
+  width:fit-content;margin-bottom:4px}
+.pantry-tabs button{border:none;background:var(--panel);padding:8px 16px;cursor:pointer;font-size:14px;color:var(--muted)}
+.pantry-tabs .seg-on{background:var(--herb);color:#fff}
+.pantry-add{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.pantry-add input{flex:1;min-width:220px;border:1px solid var(--line-dark);border-radius:7px;padding:7px 11px;
+  font-size:14px;background:var(--panel);color:var(--ink)}
+.pantry-group{align-items:flex-start;margin-bottom:10px}
+.sugg-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;margin-top:10px}
+.sugg{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.sugg-ready{border-color:#8FB58C;background:#F4F9F2}
+.sugg-top{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.sugg-name{font-weight:600;font-size:15px}
+.sugg-pct{font-size:12px;color:var(--muted);font-weight:600;flex-shrink:0}
+.pct-full{color:var(--herb-dark)}
+.sugg-ok{font-size:12px;color:var(--herb-dark);margin-top:6px;font-weight:600}
+.sugg-miss{font-size:12px;color:var(--muted);margin-top:6px}
+.sugg-btns{margin-top:8px}
+.sugg-btns .btn-ghost{padding:2px 0}
+
+/* ---- modal (paste a recipe, restore confirmation) ---- */
+.modal-back{position:fixed;inset:0;background:rgba(31,36,25,.45);z-index:200;display:flex;
+  align-items:center;justify-content:center;padding:16px}
+.modal{background:var(--panel);border-radius:14px;padding:18px;width:min(760px,100%);
+  max-height:90vh;overflow:auto;box-shadow:0 12px 40px rgba(31,36,25,.3)}
+.modal-sm{width:min(460px,100%)}
+.modal-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:4px}
+.modal-head h3{margin:0;font-family:Georgia,serif;font-size:19px;color:var(--herb-dark)}
+.modal-head .mini-x{position:static;width:26px;height:26px}
+.modal-btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.paste-box{width:100%;min-height:240px;border:1px solid var(--line-dark);border-radius:10px;padding:12px;
+  font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--bg);color:var(--ink);
+  resize:vertical;outline:none}
+.paste-box:focus{border-color:var(--herb);background:var(--panel)}
+.rp-grid{display:flex;gap:14px;flex-wrap:wrap;margin:10px 0 14px}
+.rp-grid label{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--muted)}
+.rp-grid input:not([type=number]){border:1px solid var(--line-dark);border-radius:7px;padding:6px 9px;
+  font-size:14px;background:var(--panel);color:var(--ink);min-width:190px}
+.rp-cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.rp-list{width:100%;min-height:190px;border:1px solid var(--line-dark);border-radius:10px;padding:10px;
+  font:13px/1.6 inherit;background:var(--panel);color:var(--ink);resize:vertical;outline:none}
+.rp-list:focus{border-color:var(--herb)}
+.rp-warn{margin-top:10px;background:#FFF4E2;border:1px solid #E8C68A;border-radius:8px;
+  padding:8px 12px;font-size:13px;color:#7A5312}
+
 /* ---- finger-sized controls on touch screens ---- */
 @media (pointer:coarse){
   .handle{width:30px;height:30px;background:linear-gradient(135deg,transparent 55%,var(--herb) 55%)}
@@ -205,6 +323,9 @@ select,input[type=number]{border:1px solid var(--line-dark);border-radius:7px;pa
   .swatch-grid{grid-template-columns:repeat(6,30px)}
   .wheel{width:170px;height:170px}
   .wheel-hole{inset:44px}
+  .ptable td input,.temp-table td input{padding:7px 5px}
+  .tt-ins button{padding:6px 8px}
+  .pantry-tabs button{padding:10px 18px}
 }
 @media(max-width:640px){
   .fg-label{width:100%}
@@ -219,6 +340,12 @@ select,input[type=number]{border:1px solid var(--line-dark);border-radius:7px;pa
   .name-input{font-size:20px}
   .cloud-row .store-btns{margin-left:0}
   .wheel-pop{left:auto;right:0}
+  .rp-cols{grid-template-columns:1fr}
+  .modal{padding:14px;border-radius:12px}
+  .sugg-list{grid-template-columns:1fr}
+  .temp-head .btn-ghost{margin-left:0}
+  .rp-grid{gap:10px}
+  .rp-grid input:not([type=number]){min-width:150px}
 }
 </style>
 </head>
@@ -230,6 +357,8 @@ select,input[type=number]{border:1px solid var(--line-dark);border-radius:7px;pa
 <script src="https://cdn.jsdelivr.net/npm/htm@3.1.1/dist/htm.umd.js" crossorigin></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="config.js"></script>
+<script src="data.js"></script>
+<script src="recipe-parser.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

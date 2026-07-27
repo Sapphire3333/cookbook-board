@@ -35,16 +35,52 @@ syncs too.
   *make main* button to promote one to the headline version
 - A free-text instructions box
 
-**The board**
+**The meal page**
 - **View / Arrange / Draw** modes
 - Photos by **upload, paste or drag-and-drop**, auto-downscaled to 1200px and
   re-encoded so a 5 MB phone photo lands as ~60 KB
+- **Photos, notepads and tables go anywhere on the page** — over the rating
+  fields, beside the instructions, wherever. The dotted area is only a hint about
+  where there's free room, not a boundary
 - Drag anything, resize from the corner, fade a photo with the opacity slider,
   send it to the back or bring it to the front
-- **Notepads** that things stick to: drop a photo or draw a shape on a pad and it
-  travels with the pad when you move it
+- **Notepads** that things stick to: drop a photo, a table or a drawing on a pad
+  and it travels with the pad when you move it
+- **Tables** you can drop in and type into — three columns by default, or filled
+  in for you from the temperature charts
 - Pick any photo as the **list image** shown on the meal's card
-- Grow the board whenever you run out of room
+- Grow the page whenever you run out of room
+- Nothing can be stranded off the edge: drops and resizes stay inside the page,
+  so a layout made on a laptop stays reachable on a phone
+
+**Paste a recipe from the internet**
+- Copy a recipe off any site, paste the text in, and it's sorted into name, meal
+  type, device, prep time, temperature, ingredients and numbered steps
+- Handles the common shapes: proper *Ingredients* / *Method* headings, bare
+  numbered lists, and recipes written as one solid paragraph
+- Reads °C, °F (converted) and gas marks; adds up "Prep 15 mins + Cook 45 mins"
+- **Always shows you what it worked out before saving anything**, with every
+  field editable — it's pattern matching, not comprehension, so it tells you when
+  it had to guess
+- Either creates a new meal or fills in the one you have open
+
+**What can I cook?**
+- A **pantry** of ~150 common ingredients and spices as tick boxes, plus anything
+  you want to add yourself
+- Suggestions ranked by how much of each recipe you already have, drawn from
+  **14 built-in recipes and your own saved meals**
+- *Only what I can cook now* filters to complete matches
+- Salt, pepper, oil, flour, sugar, onion and garlic are assumed — you're not
+  nagged about staples
+- Add any built-in recipe to your own meals in one click
+
+**Temps & times**
+- Charts in **°C** for **oven, air fryer and pan** across ~60 common foods —
+  chicken, chips, fish, vegetables, baking, eggs, rice and pasta
+- A separate **cooked-through internal temperature** chart
+- Searchable, and you can add your own rows
+- **Insert any row, any group, or your own table straight into a meal**, where it
+  becomes an editable table on that meal's page
 
 **Draw tools**
 - Pen, line, arrow, box, circle and highlighter
@@ -63,6 +99,10 @@ syncs too.
 
 **Safety nets**
 - Autosaves about 1.5 seconds after you stop changing things, plus a manual Save
+- **Numbered backups**: snapshots kept inside the browser, each with a **4-digit
+  code** — type the code to restore that version. One is taken automatically the
+  first time you save each day, and another right before any restore, so
+  restoring is itself undoable. The newest 20 are kept
 - **Download backup** / **Restore from backup file** as a single JSON
 - *Restore last save* to throw away unsaved changes
 
@@ -176,10 +216,15 @@ are for.
 |------|------------|
 | `index.html` | Page shell and all the styling. |
 | `app.js` | The whole app — storage, sync and UI. |
+| `data.js` | The built-in charts: temperatures, doneness, pantry list, recipes. |
+| `recipe-parser.js` | Turns pasted recipe text into fields. No network, no AI. |
 | `config.js` | Your Supabase URL + anon key. Placeholders = local-only mode. |
 | `schema.sql` | Paste-once Supabase setup (tables, bucket, security rules). |
 | `sw.js` | Service worker so the app itself opens offline. |
 | `manifest.json`, `icon.svg` | Home-screen install bits. |
+
+Want different temperatures, more pantry items or your own starter recipes? They
+all live in plain lists at the top of `data.js` — edit that one file.
 
 *No build step and no npm. React, htm and `@supabase/supabase-js` are loaded from a
 CDN and cached by the service worker; nothing is compiled.*
@@ -192,8 +237,15 @@ IndexedDB database **`cookbook`**, three stores:
 |-------|----------|
 | `meals` | One record per meal — everything except the photo bytes. |
 | `images` | One JPEG blob per photo, keyed `<mealId>__<itemId>`. |
-| `meta` | `settings` (frame theme), `index` (meal order), `deletions` (tombstones). |
+| `backups` | Numbered snapshots, keyed by their 4-digit code. |
+| `meta` | `settings` (frame theme), `index` (meal order), `pantry`, `customTemps`, `deletions` (tombstones). |
 
 Photos are deliberately kept out of the meal records: a meal stays a few kilobytes of
-JSON no matter how many photos are pinned to its board, and the browser stores the
+JSON no matter how many photos are pinned to its page, and the browser stores the
 images themselves on disk rather than in memory.
+
+Snapshots don't copy photos either — they record which photos they need, and the
+clean-up pass that deletes unreferenced images treats a snapshot's list as a
+reason to keep one. So a backup of a cookbook with 300 photos costs a few
+kilobytes, and a photo you deleted last week is still there if you restore a
+snapshot from before you deleted it.
