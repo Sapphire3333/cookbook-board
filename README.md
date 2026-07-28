@@ -33,7 +33,11 @@ syncs too.
 - **Other preparations** — the same meal in the air fryer *and* the oven, each with
   its own prep time and rating (leave either blank if you haven't tried it), and a
   *make main* button to promote one to the headline version
-- A free-text instructions box
+- **Step-by-step instructions** fill the main body of the page — each step its own
+  numbered box you can edit, reorder or delete, with a plain-text view for pasting
+  a whole method in at once
+- A **Notes** box underneath for everything that isn't a step: what to serve it
+  with, what to change next time, who liked it
 
 **The meal page**
 - **View / Arrange / Draw** modes
@@ -88,14 +92,22 @@ syncs too.
   picker; adjustable size; undo and clear
 
 **Finding things again**
-- **Overview → search by category**: combine meal type + device + rating band +
-  prep-time band + favourites, and see the matching cards
+- A **Search tab** of its own: type words that are matched across names,
+  ingredients, steps and notes
+- **Search by ingredient** — every ingredient in your cookbook as a tick list,
+  with a count of how many meals use it, and a choice of *has all of these* or
+  *has any of them*
+- Tick boxes for meal type, device, rating band, prep time and favourites; every
+  filter narrows the same list together
 - **Meals tab**: sort by newest, rating, prep time or name, or group by meal type,
   device or favourites-first, with quick filter chips on top
 
-**Decoration**
-- Six frame themes — sakura, fresh leaves, autumn, citrus, berries, herbs — drawn
-  around the whole app, remembered between visits and synced across devices
+**Making it yours**
+- **12 page backgrounds** — plain, linen, notebook grid, dots, washes, picnic
+  check, marble — or **use your own picture**, faded and fixed so the writing
+  stays readable
+- Six decorative frame themes around the whole app
+- Both are remembered between visits and follow you across devices if sync is on
 
 **Safety nets**
 - Autosaves about 1.5 seconds after you stop changing things, plus a manual Save
@@ -223,8 +235,11 @@ are for.
 | `sw.js` | Service worker so the app itself opens offline. |
 | `manifest.json`, `icon.svg` | Home-screen install bits. |
 
-Want different temperatures, more pantry items or your own starter recipes? They
-all live in plain lists at the top of `data.js` — edit that one file.
+Want different temperatures, more pantry items, extra backgrounds or your own
+starter recipes? They all live in plain lists in `data.js` — edit that one file.
+
+If the app ever fails to start, it says so rather than showing a blank page: you
+get a box naming the file that didn't load and quoting the browser's error.
 
 *No build step and no npm. React, htm and `@supabase/supabase-js` are loaded from a
 CDN and cached by the service worker; nothing is compiled.*
@@ -238,7 +253,10 @@ IndexedDB database **`cookbook`**, three stores:
 | `meals` | One record per meal — everything except the photo bytes. |
 | `images` | One JPEG blob per photo, keyed `<mealId>__<itemId>`. |
 | `backups` | Numbered snapshots, keyed by their 4-digit code. |
-| `meta` | `settings` (frame theme), `index` (meal order), `pantry`, `customTemps`, `deletions` (tombstones). |
+| `meta` | `settings` (frame theme), `index` (meal order), `pantry`, `customTemps`, `background`, `deletions` (tombstones). |
+
+Your chosen background picture is stored in `images` under the reserved key
+`__background__`, so it belongs to no meal and the clean-up pass leaves it alone.
 
 Photos are deliberately kept out of the meal records: a meal stays a few kilobytes of
 JSON no matter how many photos are pinned to its page, and the browser stores the

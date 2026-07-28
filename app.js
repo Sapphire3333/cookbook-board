@@ -89,10 +89,22 @@ function newMeal() {
   return {
     id: uid(), name: "New meal", mealType: "Dinner", device: "Stovetop",
     prepTime: 30, rating: 7.0, favorite: false, coverId: null, variants: [],
-    instructions: "", ingredients: [], items: [], strokes: [], boardH: 640,
+    instructions: "", notes: "", ingredients: [], items: [], strokes: [], boardH: 640,
     created: Date.now(), modified: Date.now(),
   };
 }
+
+/* Steps live inside the plain `instructions` string, one per line, so the
+   backup file stays exactly the shape the original artifact wrote and there are
+   never two copies of the same text to fall out of step. The editor splits on
+   newlines, strips any numbering it finds, and writes numbering back. */
+function stepsOf(instructions) {
+  return String(instructions || "")
+    .split("\n")
+    .map((s) => s.replace(/^\s*(?:step\s*)?\d+\s*[.)]\s*/i, "").trim())
+    .filter(Boolean);
+}
+const stepsToText = (steps) => steps.map((s, i) => (i + 1) + ". " + s).join("\n");
 
 /* ------------------------------------------------------------------ */
 /*  IndexedDB                                                          */
@@ -230,7 +242,8 @@ async function hydrateMeal(meal) {
   }
   return {
     ...meal, items,
-    variants: meal.variants || [], strokes: meal.strokes || [], ingredients: meal.ingredients || [],
+    variants: meal.variants || [], strokes: meal.strokes || [],
+    ingredients: meal.ingredients || [], notes: meal.notes || "",
   };
 }
 
@@ -855,6 +868,76 @@ function Ingredients({ list, have, onChange }) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Step-by-step instructions — the main body of a meal page           */
+/* ------------------------------------------------------------------ */
+function Steps({ instructions, onChange }) {
+  const [bulk, setBulk] = useState(false);
+  const [draft, setDraft] = useState("");
+  const steps = stepsOf(instructions);
+  const write = (next) => onChange(stepsToText(next));
+
+  const addStep = () => {
+    const parts = draft.split("\n").map((s) => s.trim()).filter(Boolean);
+    if (!parts.length) return;
+    write([...steps, ...parts]);
+    setDraft("");
+  };
+  const setStep = (i, v) => write(steps.map((s, j) => (j === i ? v : s)));
+  const removeStep = (i) => write(steps.filter((_, j) => j !== i));
+  const moveStep = (i, dir) => {
+    const j = i + dir;
+    if (j < 0 || j >= steps.length) return;
+    const next = [...steps];
+    [next[i], next[j]] = [next[j], next[i]];
+    write(next);
+  };
+
+  return html`
+    <div className="steps-wrap">
+      <div className="steps-head">
+        <h3>Instructions</h3>
+        <button className="btn btn-ghost" onClick=${() => setBulk((b) => !b)}>
+          ${bulk ? "← back to steps" : "edit as plain text"}
+        </button>
+      </div>
+
+      ${bulk ? html`
+        <textarea className="steps-bulk" value=${instructions}
+          placeholder=${"One step per line.\nPaste a whole method here and it becomes numbered steps."}
+          onChange=${(e) => onChange(e.target.value)} />`
+      : html`
+        <${Frag}>
+          ${steps.length === 0 && html`
+            <p className="steps-empty">
+              No steps yet. Write the first one below — or use <b>⎘ Paste a recipe</b> up in the toolbar
+              and they'll be filled in for you.
+            </p>`}
+          <ol className="steps">
+            ${steps.map((s, i) => html`
+              <li key=${i} className="step">
+                <span className="step-n">${i + 1}</span>
+                <textarea className="step-text" value=${s} rows="1"
+                  onChange=${(e) => setStep(i, e.target.value)}
+                  onInput=${(e) => { e.target.style.height = "auto"; e.target.style.height = e.target.scrollHeight + "px"; }}
+                  ref=${(el) => { if (el) { el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; } }} />
+                <span className="step-btns">
+                  <button title="Move up" disabled=${i === 0} onClick=${() => moveStep(i, -1)}>↑</button>
+                  <button title="Move down" disabled=${i === steps.length - 1} onClick=${() => moveStep(i, 1)}>↓</button>
+                  <button title="Delete this step" onClick=${() => removeStep(i)}>✕</button>
+                </span>
+              </li>`)}
+          </ol>
+          <div className="step-add">
+            <textarea value=${draft} rows="1" placeholder="add the next step…"
+              onChange=${(e) => setDraft(e.target.value)}
+              onKeyDown=${(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); addStep(); } }} />
+            <button className="btn" onClick=${addStep}>+ Step</button>
+          </div>
+        <//>`}
+    </div>`;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Meal detail                                                        */
 /* ------------------------------------------------------------------ */
 function MealDetail({ meal, update, onDelete, have, onPasteRecipe }) {
@@ -1082,16 +1165,18 @@ function MealDetail({ meal, update, onDelete, have, onPasteRecipe }) {
           <span className="hint">switch to Arrange to move photos, pads and tables around the page</span>`}
       </div>
 
-      <div ref=${boardRef} className="board" style=${{ height: meal.boardH }}>
+      <div ref=${boardRef} className="board" style=${{ minHeight: meal.boardH }}>
+        <${Steps} instructions=${meal.instructions}
+          onChange=${(instructions) => update((m) => ({ ...m, instructions }))} />
         ${meal.items.length === 0 && meal.strokes.length === 0 && html`
-          <div className="board-empty">Paste, drop or upload photos, add a notepad or a table, or switch to Draw.
-            In Arrange mode you can drag any of it anywhere on this page — including over the fields above.</div>`}
+          <div className="board-hint">Photos, notepads and tables land on this page and can be dragged
+            anywhere — including over the fields above. Paste, drop or upload one to start.</div>`}
       </div>
       <button className="btn btn-ghost" onClick=${() => update((m) => ({ ...m, boardH: m.boardH + 320 }))}>+ more space</button>
 
-      <h3 className="sec-h">Instructions</h3>
-      <textarea className="instructions" value=${meal.instructions} onChange=${set("instructions")}
-        placeholder=${"1. …\n2. …"} />
+      <h3 className="sec-h">Notes</h3>
+      <textarea className="instructions" value=${meal.notes || ""} onChange=${set("notes")}
+        placeholder=${"Anything that isn't a step — what to serve it with, what to change next time, who liked it."} />
 
       <${PageCanvas} meal=${meal} mode=${mode} draw=${{ tool, color, size }} update=${update} pageRef=${pageRef} />
     </div>`;
@@ -1550,6 +1635,52 @@ function BackupsPanel({ backups, onCreate, onRestore, onDelete, busy }) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Background picker                                                  */
+/* ------------------------------------------------------------------ */
+const BG_KEY = "__background__";
+
+function BackgroundPanel({ background, setBackground, customUrl, onUploadCustom, onClearCustom, busy }) {
+  const fileRef = useRef(null);
+  return html`
+    <div className="panel cloud">
+      <div className="cloud-head">Page background</div>
+      <p className="sub" style=${{ margin: "0 0 10px" }}>
+        Applies everywhere and is remembered between visits. All of these are pale on purpose —
+        the writing is dark, so a dark background would be hard to read.
+      </p>
+      <div className="bg-grid">
+        ${BACKGROUNDS.map((b) => html`
+          <button key=${b.id} title=${b.label}
+            className=${"bg-sw" + (background.id === b.id && !background.custom ? " bg-on" : "")}
+            style=${{ background: b.css }}
+            onClick=${() => setBackground({ id: b.id, custom: false })}>
+            <span className="bg-label">${b.label}</span>
+          </button>`)}
+        ${customUrl && html`
+          <button title="Your picture"
+            className=${"bg-sw" + (background.custom ? " bg-on" : "")}
+            style=${{ backgroundImage: "url(" + customUrl + ")", backgroundSize: "cover", backgroundPosition: "center" }}
+            onClick=${() => setBackground({ id: "custom", custom: true })}>
+            <span className="bg-label">Your picture</span>
+          </button>`}
+      </div>
+      <div className="store-btns" style=${{ marginLeft: 0, marginTop: 10 }}>
+        <button className="btn" disabled=${busy} onClick=${() => fileRef.current.click()}>
+          ${customUrl ? "Replace my picture" : "Use my own picture"}
+        </button>
+        ${customUrl && html`<button className="btn" onClick=${onClearCustom}>Remove my picture</button>`}
+        <input ref=${fileRef} type="file" accept="image/*" style=${{ display: "none" }}
+          onChange=${(e) => { if (e.target.files[0]) onUploadCustom(e.target.files[0]); e.target.value = ""; }} />
+      </div>
+      ${customUrl && html`
+        <p className="sub" style=${{ margin: "8px 0 0" }}>
+          A picture behind the whole app can make text harder to read — it's faded and fixed in place
+          to help, but a busy photo will still fight the writing.
+        </p>`}
+    </div>`;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Cloud panel                                                        */
 /* ------------------------------------------------------------------ */
 function CloudPanel({ user, onSignIn, onSignUp, onSignOut, onSyncNow, syncing, lastSync }) {
@@ -1606,26 +1737,153 @@ function CloudPanel({ user, onSignIn, onSignUp, onSignOut, onSyncNow, syncing, l
 }
 
 /* ------------------------------------------------------------------ */
-/*  Overview tab                                                       */
+/*  Search tab                                                         */
 /* ------------------------------------------------------------------ */
-function Overview(props) {
-  const { meals, status, onSave, onLoad, onBackup, onRestoreFile, onOpen, onFav, usage } = props;
-  const [sel, setSel] = useState({ types: [], devices: [], ratings: [], times: [], fav: false });
-  const restoreRef = useRef(null);
-  const imgCount = meals.reduce((n, m) => n + m.items.filter((i) => i.kind === "image").length, 0);
+function Check({ on, onClick, children, tone }) {
+  return html`
+    <button className=${"chk" + (on ? " chk-on" : "") + (tone ? " chk-" + tone : "")} onClick=${onClick}>
+      <span className="chk-box">${on ? "✓" : ""}</span>${children}
+    </button>`;
+}
+
+function SearchTab({ meals, onOpen, onFav }) {
+  const [q, setQ] = useState("");
+  const [sel, setSel] = useState({ types: [], devices: [], ratings: [], times: [], ings: [], fav: false });
+  const [ingMode, setIngMode] = useState("all");
+  const [ingQ, setIngQ] = useState("");
 
   const toggle = (group, id) =>
     setSel((s) => ({ ...s, [group]: s[group].includes(id) ? s[group].filter((x) => x !== id) : [...s[group], id] }));
+  const clearAll = () => {
+    setSel({ types: [], devices: [], ratings: [], times: [], ings: [], fav: false });
+    setQ(""); setIngQ("");
+  };
 
-  const anyFilter = sel.types.length || sel.devices.length || sel.ratings.length || sel.times.length || sel.fav;
+  /* Every ingredient across the cookbook, normalised so "2 cloves garlic" and
+     "Garlic" are one entry, with a count so the common ones sort to the top. */
+  const allIngredients = useMemo(() => {
+    const counts = new Map();
+    for (const m of meals) {
+      const seen = new Set();
+      for (const raw of m.ingredients || []) {
+        const key = normalize(Parser.ingredientKey(raw) || raw);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        counts.set(key, (counts.get(key) || 0) + 1);
+      }
+    }
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([name, n]) => ({ name, n }));
+  }, [meals]);
+
+  const shownIngredients = allIngredients.filter((i) => !ingQ.trim() || i.name.includes(ingQ.trim().toLowerCase()));
+
+  const mealIngKeys = (m) =>
+    (m.ingredients || []).map((raw) => normalize(Parser.ingredientKey(raw) || raw)).filter(Boolean);
+
+  const needle = q.trim().toLowerCase();
+  const anyFilter = needle || sel.types.length || sel.devices.length || sel.ratings.length ||
+    sel.times.length || sel.ings.length || sel.fav;
+
   const results = meals.filter((m) => {
     if (sel.types.length && !sel.types.includes(m.mealType)) return false;
     if (sel.devices.length && !sel.devices.includes(m.device)) return false;
     if (sel.ratings.length && !sel.ratings.some((id) => RATING_BANDS.find((b) => b.id === id).test(m.rating))) return false;
     if (sel.times.length && !sel.times.some((id) => TIME_BANDS.find((b) => b.id === id).test(m.prepTime))) return false;
     if (sel.fav && !m.favorite) return false;
+    if (sel.ings.length) {
+      const keys = mealIngKeys(m);
+      const hit = (want) => keys.some((k) => k === want || k.includes(want) || want.includes(k));
+      if (ingMode === "all" ? !sel.ings.every(hit) : !sel.ings.some(hit)) return false;
+    }
+    if (needle) {
+      const hay = [m.name, m.mealType, m.device, m.instructions, m.notes,
+        (m.ingredients || []).join(" ")].join(" ").toLowerCase();
+      if (!needle.split(/\s+/).every((w) => hay.includes(w))) return false;
+    }
     return true;
   });
+
+  return html`
+    <div>
+      <h3 className="sec-h">Search</h3>
+      <p className="sub">
+        Type words, tick categories, tick ingredients — they all narrow the same list together.
+      </p>
+
+      <input className="big-search" value=${q}
+        placeholder="search names, ingredients, steps and notes…"
+        onChange=${(e) => setQ(e.target.value)} />
+
+      <div className="filter-groups">
+        <div className="fgroup"><span className="fg-label">Meal type</span>
+          ${MEAL_TYPES.map((t) => html`<${Check} key=${t} on=${sel.types.includes(t)} onClick=${() => toggle("types", t)}>${t}<//>`)}
+        </div>
+        <div className="fgroup"><span className="fg-label">Device</span>
+          ${DEVICES.map((t) => html`<${Check} key=${t} on=${sel.devices.includes(t)} onClick=${() => toggle("devices", t)}>${t}<//>`)}
+        </div>
+        <div className="fgroup"><span className="fg-label">Rating</span>
+          ${RATING_BANDS.map((b) => html`<${Check} key=${b.id} on=${sel.ratings.includes(b.id)} onClick=${() => toggle("ratings", b.id)}>${b.label}<//>`)}
+        </div>
+        <div className="fgroup"><span className="fg-label">Prep time</span>
+          ${TIME_BANDS.map((b) => html`<${Check} key=${b.id} on=${sel.times.includes(b.id)} onClick=${() => toggle("times", b.id)}>${b.label}<//>`)}
+        </div>
+        <div className="fgroup"><span className="fg-label">Favorites</span>
+          <${Check} on=${sel.fav} tone="fav" onClick=${() => setSel((s) => ({ ...s, fav: !s.fav }))}>★ Favorites only<//>
+        </div>
+      </div>
+
+      <div className="ing-search">
+        <div className="ing-search-head">
+          <span className="fg-label" style=${{ width: "auto" }}>Ingredients</span>
+          ${allIngredients.length > 0 && html`
+            <${Frag}>
+              <div className="mode-seg mode-sm">
+                <button className=${ingMode === "all" ? "seg-on" : ""} onClick=${() => setIngMode("all")}>has all of these</button>
+                <button className=${ingMode === "any" ? "seg-on" : ""} onClick=${() => setIngMode("any")}>has any of them</button>
+              </div>
+              <input className="ing-filter" value=${ingQ} placeholder="filter this list…"
+                onChange=${(e) => setIngQ(e.target.value)} />
+            <//>`}
+        </div>
+        ${allIngredients.length === 0
+          ? html`<p className="sub" style=${{ margin: 0 }}>
+              No ingredients recorded yet. Add some to a meal and they'll be searchable here.</p>`
+          : html`
+            <div className="ing-check-grid">
+              ${shownIngredients.map((i) => html`
+                <${Check} key=${i.name} on=${sel.ings.includes(i.name)} onClick=${() => toggle("ings", i.name)}>
+                  ${i.name}<span className="ing-n">${i.n}</span>
+                <//>`)}
+              ${shownIngredients.length === 0 && html`<span className="sub">Nothing matches “${ingQ}”.</span>`}
+            </div>`}
+      </div>
+
+      ${anyFilter ? html`
+        <${Frag}>
+          <h3 className="sec-h">
+            ${results.length} match${results.length === 1 ? "" : "es"}
+            <button className="btn btn-ghost" onClick=${clearAll}>clear search</button>
+          </h3>
+          <div className="grid">
+            ${results.map((m) => html`<${MealCard} key=${m.id} meal=${m} onOpen=${onOpen} onFav=${onFav} />`)}
+          </div>
+          ${results.length === 0 && html`
+            <p className="sub">Nothing matches all of that${sel.ings.length > 1 && ingMode === "all"
+              ? " — try “has any of them” for the ingredients." : " — untick something to widen it."}</p>`}
+        <//>`
+        : html`<p className="sub">Type something or tick anything above to start searching.</p>`}
+    </div>`;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Overview tab                                                       */
+/* ------------------------------------------------------------------ */
+function Overview(props) {
+  const { meals, status, onSave, onLoad, onBackup, onRestoreFile, usage } = props;
+  const restoreRef = useRef(null);
+  const imgCount = meals.reduce((n, m) => n + m.items.filter((i) => i.kind === "image").length, 0);
 
   return html`
     <div>
@@ -1648,36 +1906,7 @@ function Overview(props) {
 
       <${BackupsPanel} ...${props.backupsPanel} />
       <${CloudPanel} ...${props.cloud} />
-
-      <h3 className="sec-h">Search by category</h3>
-      <p className="sub">Click categories to combine them — e.g. Dinner + Air fryer + 9.0 + shows only meals matching all three.</p>
-      <div className="filter-groups">
-        <div className="fgroup"><span className="fg-label">Meal type</span>
-          ${MEAL_TYPES.map((t) => html`<${Chip} key=${t} active=${sel.types.includes(t)} onClick=${() => toggle("types", t)}>${t}<//>`)}
-        </div>
-        <div className="fgroup"><span className="fg-label">Device</span>
-          ${DEVICES.map((t) => html`<${Chip} key=${t} active=${sel.devices.includes(t)} onClick=${() => toggle("devices", t)}>${t}<//>`)}
-        </div>
-        <div className="fgroup"><span className="fg-label">Rating</span>
-          ${RATING_BANDS.map((b) => html`<${Chip} key=${b.id} active=${sel.ratings.includes(b.id)} onClick=${() => toggle("ratings", b.id)}>${b.label}<//>`)}
-        </div>
-        <div className="fgroup"><span className="fg-label">Prep time</span>
-          ${TIME_BANDS.map((b) => html`<${Chip} key=${b.id} active=${sel.times.includes(b.id)} onClick=${() => toggle("times", b.id)}>${b.label}<//>`)}
-        </div>
-        <div className="fgroup"><span className="fg-label">Favorites</span>
-          <${Chip} active=${sel.fav} tone="fav" onClick=${() => setSel((s) => ({ ...s, fav: !s.fav }))}>★ Favorites only<//>
-        </div>
-      </div>
-
-      ${anyFilter ? html`
-        <${Frag}>
-          <h3 className="sec-h">${results.length} match${results.length === 1 ? "" : "es"}</h3>
-          <div className="grid">
-            ${results.map((m) => html`<${MealCard} key=${m.id} meal=${m} onOpen=${onOpen} onFav=${onFav} />`)}
-          </div>
-          ${results.length === 0 && html`<p className="sub">Nothing matches this combination — remove a category to widen the search.</p>`}
-        <//>`
-        : html`<p className="sub">Pick a category above to start searching.</p>`}
+      <${BackgroundPanel} ...${props.background} />
     </div>`;
 }
 
@@ -1748,7 +1977,7 @@ function MealsTab({ meals, onOpen, onFav, onNew, onPasteRecipe }) {
 /* ------------------------------------------------------------------ */
 function CookingOrganizer() {
   const [meals, setMeals] = useState([]);
-  const [tab, setTab] = useState("overview"); // overview | meals | pantry | temps | <meal id>
+  const [tab, setTab] = useState("meals"); // meals | search | pantry | temps | overview | <meal id>
   const [status, setStatus] = useState("");
   const [dirty, setDirty] = useState(false);
   const [ready, setReady] = useState(false);
@@ -1761,6 +1990,8 @@ function CookingOrganizer() {
   const [pantry, setPantryState] = useState({ have: {}, custom: [] });
   const [customTemps, setCustomTempsState] = useState([]);
   const [pasteOpen, setPasteOpen] = useState(false);
+  const [background, setBackgroundState] = useState({ id: "paper", custom: false });
+  const [customBgUrl, setCustomBgUrl] = useState(null);
   const savedIds = useRef([]);
   const deletions = useRef({});
   const autoTimer = useRef(null);
@@ -1826,6 +2057,12 @@ function CookingOrganizer() {
         if (p && p.have) setPantryState({ have: p.have || {}, custom: p.custom || [] });
       } catch { /* none */ }
       try { setCustomTempsState((await idb.get("meta", "customTemps")) || []); } catch { /* none */ }
+      try {
+        const b = await idb.get("meta", "background");
+        if (b && b.id) setBackgroundState(b);
+        const blob = await idb.get("images", BG_KEY);
+        if (blob) setCustomBgUrl(urlFor(BG_KEY, blob));
+      } catch { /* no background chosen yet */ }
       await loadAll();
       await refreshBackups();
       try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch { /* unsupported */ }
@@ -1869,6 +2106,41 @@ function CookingOrganizer() {
     if (Sync.user) Sync.setMeta("customTemps", customTemps).catch(() => { });
   }, [customTemps, ready]);
 
+  const setBackground = (b) => {
+    setBackgroundState(b);
+    idb.put("meta", b, "background").catch(() => { });
+    if (Sync.user) Sync.setMeta("background", b).catch(() => { });
+  };
+  /* The picture is stored like any other photo — downscaled, as a Blob — but
+     under a reserved key so the orphan sweep leaves it alone. */
+  const uploadCustomBg = async (file) => {
+    try {
+      const { blob } = await processImageFile(file);
+      await idb.put("images", blob, BG_KEY);
+      dropUrl(BG_KEY);
+      setCustomBgUrl(urlFor(BG_KEY, blob));
+      setBackground({ id: "custom", custom: true });
+      flash("Background updated.");
+    } catch { flash("Couldn't read that picture."); }
+  };
+  const clearCustomBg = async () => {
+    try { await idb.del("images", BG_KEY); } catch { /* already gone */ }
+    dropUrl(BG_KEY);
+    setCustomBgUrl(null);
+    setBackground({ id: "paper", custom: false });
+  };
+
+  const bgStyle = useMemo(() => {
+    if (background.custom && customBgUrl) {
+      return {
+        backgroundImage: "linear-gradient(rgba(255,255,255,.72),rgba(255,255,255,.72)), url(" + customBgUrl + ")",
+        backgroundSize: "cover", backgroundPosition: "center", backgroundAttachment: "fixed",
+      };
+    }
+    const preset = BACKGROUNDS.find((b) => b.id === background.id) || BACKGROUNDS[0];
+    return preset ? { background: preset.css, backgroundAttachment: "fixed" } : {};
+  }, [background, customBgUrl]);
+
   /* ---------- save ---------- */
   const saveAll = useCallback(async (quiet) => {
     const list = mealsRef.current;
@@ -1892,7 +2164,7 @@ function CookingOrganizer() {
 
       /* Sweep photos nothing points at any more — meals, in-flight writes and
          every stored snapshot all count as "pointing at". */
-      const live = new Set();
+      const live = new Set([BG_KEY]);   // the background picture belongs to no meal
       for (const m of list) for (const it of m.items) if (it.kind === "image") live.add(imgKey(m.id, it.id));
       for (const b of await idb.getAll("backups")) for (const k of b.imageKeys || []) live.add(k);
       for (const k of await idb.keys("images")) {
@@ -1957,7 +2229,8 @@ function CookingOrganizer() {
         for (const raw of data.meals) {
           const m = {
             ...raw, id: raw.id || uid(), items: raw.items || [],
-            strokes: raw.strokes || [], variants: raw.variants || [], ingredients: raw.ingredients || [],
+            strokes: raw.strokes || [], variants: raw.variants || [],
+            ingredients: raw.ingredients || [], notes: raw.notes || "",
           };
           const items = [];
           for (const it of m.items) {
@@ -2043,11 +2316,15 @@ function CookingOrganizer() {
     flash("Added “" + table.title + "” to " + target.name + ".");
   };
 
+  /* The temperature goes in Notes rather than becoming step 1 — it's a fact
+     about the dish, not something you do. */
   const mealFromRecipe = (p) => ({
     ...newMeal(),
     name: p.name, mealType: p.mealType, device: p.device,
     prepTime: p.prepTime, ingredients: p.ingredients,
-    instructions: (p.temp ? "Oven / air fryer: " + p.temp + " °C\n\n" : "") + p.instructions,
+    instructions: stepsToText(p.steps),
+    notes: [p.temp ? "Oven / air fryer: " + p.temp + " °C" : "", p.servings ? "Serves " + p.servings : ""]
+      .filter(Boolean).join("\n"),
   });
   const createFromRecipe = (p) => {
     const m = mealFromRecipe(p);
@@ -2064,8 +2341,9 @@ function CookingOrganizer() {
       ...m,
       name: p.name || m.name, mealType: p.mealType, device: p.device, prepTime: p.prepTime,
       ingredients: [...(m.ingredients || []), ...p.ingredients],
-      instructions: (m.instructions ? m.instructions + "\n\n" : "") +
-        (p.temp ? "Oven / air fryer: " + p.temp + " °C\n\n" : "") + p.instructions,
+      instructions: stepsToText([...stepsOf(m.instructions), ...p.steps]),
+      notes: [m.notes, p.temp ? "Oven / air fryer: " + p.temp + " °C" : "", p.servings ? "Serves " + p.servings : ""]
+        .filter(Boolean).join("\n"),
     }));
     setPasteOpen(false);
     flash("Filled in “" + p.name + "”.");
@@ -2183,11 +2461,19 @@ function CookingOrganizer() {
     onDelete: async (code) => { await idb.del("backups", code); await refreshBackups(); flash("Backup " + code + " deleted."); },
   };
 
+  const backgroundPanel = {
+    background, setBackground, customUrl: customBgUrl,
+    onUploadCustom: uploadCustomBg, onClearCustom: clearCustomBg, busy: !ready,
+  };
+
   const open = meals.find((m) => m.id === tab);
-  const TABS = [["overview", "Overview & search"], ["meals", "Meals"], ["pantry", "What can I cook?"], ["temps", "Temps & times"]];
+  const TABS = [
+    ["meals", "Meals"], ["search", "Search"], ["pantry", "What can I cook?"],
+    ["temps", "Temps & times"], ["overview", "Storage & backups"],
+  ];
 
   return html`
-    <div className="app">
+    <div className="app" style=${bgStyle}>
       <${Frame} theme=${theme} />
       <header className="top">
         <div className="brand">The Cookbook Board</div>
@@ -2232,6 +2518,11 @@ function CookingOrganizer() {
             <${MealsTab} meals=${meals} onOpen=${setTab} onFav=${toggleFav} onNew=${addMeal}
               onPasteRecipe=${() => setPasteOpen(true)} />
           </div>`
+        : tab === "search"
+        ? html`
+          <div className="page">
+            <${SearchTab} meals=${meals} onOpen=${setTab} onFav=${toggleFav} />
+          </div>`
         : tab === "pantry"
         ? html`
           <div className="page">
@@ -2246,9 +2537,9 @@ function CookingOrganizer() {
           </div>`
         : html`
           <div className="page">
-            <${Overview} meals=${meals} status=${status} usage=${usage} cloud=${cloud} backupsPanel=${backupsPanel}
-              onSave=${() => saveAll(false)} onBackup=${backup}
-              onRestoreFile=${restoreFile} onOpen=${setTab} onFav=${toggleFav}
+            <${Overview} meals=${meals} status=${status} usage=${usage} cloud=${cloud}
+              backupsPanel=${backupsPanel} background=${backgroundPanel}
+              onSave=${() => saveAll(false)} onBackup=${backup} onRestoreFile=${restoreFile}
               onLoad=${async () => { const n = await loadAll(); flash(n ? "Restored last save (" + n + " meals)." : "No save found yet."); }} />
           </div>`}
 

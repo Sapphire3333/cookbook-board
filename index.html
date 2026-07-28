@@ -162,9 +162,38 @@ select,input[type=number]{border:1px solid var(--line-dark);border-radius:7px;pa
    underneath. Notepads and tables stay usable so you can type in them. */
 .pagelayer-view .bimg{pointer-events:none}
 .board{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:12px;
-  background-image:radial-gradient(var(--line) 1px,transparent 1px);background-size:22px 22px}
-.board-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-  color:var(--line-dark);font-size:14px;text-align:center;padding:20px;pointer-events:none}
+  background-image:radial-gradient(var(--line) 1px,transparent 1px);background-size:22px 22px;
+  padding:16px 18px 28px}
+.board-hint{color:var(--line-dark);font-size:13px;text-align:center;padding:18px 20px 4px;
+  pointer-events:none;max-width:520px;margin:0 auto}
+
+/* ---- step-by-step instructions, the main body of a meal page ---- */
+.steps-wrap{position:relative;z-index:1}
+.steps-head{display:flex;align-items:baseline;gap:10px;margin-bottom:6px}
+.steps-head h3{margin:0;font-family:Georgia,serif;font-size:18px;color:var(--herb-dark)}
+.steps-head .btn-ghost{margin-left:auto;padding:2px 4px;font-size:13px}
+.steps-empty{color:var(--muted);font-size:13px;margin:0 0 10px}
+.steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.step{display:flex;align-items:flex-start;gap:9px;background:var(--panel);border:1px solid var(--line);
+  border-radius:9px;padding:7px 8px 7px 9px}
+.step:focus-within{border-color:var(--herb)}
+.step-n{flex-shrink:0;width:23px;height:23px;border-radius:50%;background:var(--herb);color:#fff;
+  font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;margin-top:2px}
+.step-text{flex:1;min-width:0;border:none;background:none;outline:none;resize:none;overflow:hidden;
+  font:15px/1.55 inherit;color:var(--ink);padding:2px 0}
+.step-btns{display:flex;gap:1px;flex-shrink:0;opacity:.45;transition:opacity .15s}
+.step:hover .step-btns,.step:focus-within .step-btns{opacity:1}
+.step-btns button{border:none;background:none;cursor:pointer;color:var(--muted);font-size:13px;
+  padding:3px 5px;border-radius:5px;line-height:1}
+.step-btns button:hover:not(:disabled){background:var(--bg);color:var(--ink)}
+.step-btns button:disabled{opacity:.25;cursor:default}
+.step-add{display:flex;align-items:flex-start;gap:8px;margin-top:8px}
+.step-add textarea{flex:1;min-width:0;border:1px dashed var(--line-dark);border-radius:9px;padding:8px 10px;
+  font:15px/1.55 inherit;background:var(--panel);color:var(--ink);resize:none;overflow:hidden;outline:none}
+.step-add textarea:focus{border-style:solid;border-color:var(--herb)}
+.steps-bulk{width:100%;min-height:280px;border:1px solid var(--line-dark);border-radius:10px;padding:12px;
+  font:14px/1.7 inherit;background:var(--panel);color:var(--ink);resize:vertical;outline:none}
+.steps-bulk:focus{border-color:var(--herb)}
 .strokes{position:absolute;inset:0;width:100%;height:100%;z-index:900;pointer-events:none;overflow:visible}
 .bimg{position:absolute;z-index:20;border-radius:8px;overflow:hidden;
   box-shadow:0 2px 8px rgba(31,36,25,.18);user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
@@ -307,6 +336,41 @@ select,input[type=number]{border:1px solid var(--line-dark);border-radius:7px;pa
 .sugg-btns{margin-top:8px}
 .sugg-btns .btn-ghost{padding:2px 0}
 
+/* ---- search tab ---- */
+.big-search{width:100%;border:1px solid var(--line-dark);border-radius:10px;padding:11px 15px;
+  font-size:16px;background:var(--panel);color:var(--ink);outline:none;margin-bottom:14px}
+.big-search:focus{border-color:var(--herb)}
+.chk{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line-dark);background:var(--panel);
+  border-radius:8px;padding:5px 11px 5px 7px;font-size:13px;cursor:pointer;color:var(--ink)}
+.chk:hover{border-color:var(--herb)}
+.chk-box{width:16px;height:16px;border:1.5px solid var(--line-dark);border-radius:4px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;line-height:1;background:var(--panel)}
+.chk-on{border-color:var(--herb);background:#EAF2E6;color:var(--herb-dark);font-weight:600}
+.chk-on .chk-box{background:var(--herb);border-color:var(--herb)}
+.chk-fav.chk-on{border-color:var(--paprika);background:#FBECE3;color:#9C4517}
+.chk-fav.chk-on .chk-box{background:var(--paprika);border-color:var(--paprika)}
+.ing-search{margin-top:16px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.ing-search-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:9px}
+.mode-sm button{padding:4px 10px;font-size:12px}
+.ing-filter{border:1px solid var(--line-dark);border-radius:7px;padding:5px 10px;font-size:13px;
+  background:var(--panel);color:var(--ink);margin-left:auto;min-width:150px}
+.ing-check-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px;
+  max-height:320px;overflow-y:auto}
+.ing-check-grid .chk{justify-content:flex-start;text-align:left}
+.ing-n{margin-left:auto;color:var(--muted);font-size:11px;font-weight:400;padding-left:6px}
+.sec-h .btn-ghost{font-size:13px;padding:2px 6px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+
+/* ---- background picker ---- */
+.bg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:8px}
+.bg-sw{position:relative;height:62px;border:1px solid var(--line-dark);border-radius:9px;cursor:pointer;
+  overflow:hidden;padding:0;display:block}
+.bg-sw:hover{border-color:var(--herb)}
+.bg-on{outline:2px solid var(--herb);outline-offset:1px;border-color:var(--herb)}
+.bg-on::after{content:"✓";position:absolute;top:4px;right:5px;background:var(--herb);color:#fff;
+  width:18px;height:18px;border-radius:50%;font-size:11px;display:flex;align-items:center;justify-content:center}
+.bg-label{position:absolute;left:0;right:0;bottom:0;background:rgba(255,255,255,.82);color:var(--ink);
+  font-size:10.5px;padding:2px 4px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
 /* ---- modal (paste a recipe, restore confirmation) ---- */
 .modal-back{position:fixed;inset:0;background:rgba(31,36,25,.45);z-index:200;display:flex;
   align-items:center;justify-content:center;padding:16px}
@@ -350,6 +414,9 @@ select,input[type=number]{border:1px solid var(--line-dark);border-radius:7px;pa
   .ptable td input,.temp-table td input{padding:7px 5px}
   .tt-ins button{padding:6px 8px}
   .pantry-tabs button{padding:10px 18px}
+  .chk{padding:8px 13px 8px 9px}
+  .step-btns{opacity:1}
+  .step-btns button{padding:6px 8px;font-size:15px}
 }
 @media(max-width:640px){
   .fg-label{width:100%}
@@ -370,6 +437,11 @@ select,input[type=number]{border:1px solid var(--line-dark);border-radius:7px;pa
   .temp-head .btn-ghost{margin-left:0}
   .rp-grid{gap:10px}
   .rp-grid input:not([type=number]){min-width:150px}
+  .board{padding:12px 12px 24px}
+  .ing-check-grid{grid-template-columns:1fr 1fr;max-height:260px}
+  .ing-filter{margin-left:0;width:100%}
+  .bg-grid{grid-template-columns:repeat(auto-fill,minmax(88px,1fr))}
+  .steps-head{flex-wrap:wrap}
 }
 </style>
 </head>

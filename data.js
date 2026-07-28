@@ -196,6 +196,24 @@ window.PANTRY_GROUPS = [
   },
 ];
 
+/* Page backgrounds. All deliberately pale — the app's text is dark, and a
+   background dark enough to fight it would make the whole thing unreadable.
+   `css` goes straight into the background shorthand. */
+window.BACKGROUNDS = [
+  { id: "paper", label: "Plain paper", css: "#F3F5EF" },
+  { id: "cream", label: "Cream", css: "#FAF6EC" },
+  { id: "linen", label: "Linen", css: "repeating-linear-gradient(45deg,#F6F4EC,#F6F4EC 6px,#F1EEE3 6px,#F1EEE3 12px)" },
+  { id: "grid", label: "Notebook grid", css: "linear-gradient(#E4E9DC 1px,transparent 1px) 0 0/22px 22px,linear-gradient(90deg,#E4E9DC 1px,transparent 1px) 0 0/22px 22px,#F5F7F0" },
+  { id: "dots", label: "Dotted", css: "radial-gradient(#DBE2D2 1.4px,transparent 1.4px) 0 0/20px 20px,#F5F7F0" },
+  { id: "sage", label: "Sage wash", css: "linear-gradient(160deg,#EDF2E7,#E2EBDD)" },
+  { id: "peach", label: "Peach wash", css: "linear-gradient(160deg,#FDF0E6,#F8E3D6)" },
+  { id: "sky", label: "Sky wash", css: "linear-gradient(160deg,#EAF2F7,#DCE9F2)" },
+  { id: "lilac", label: "Lilac wash", css: "linear-gradient(160deg,#F1ECF7,#E6DEF1)" },
+  { id: "butter", label: "Butter", css: "linear-gradient(160deg,#FBF6DE,#F5EDC9)" },
+  { id: "check", label: "Picnic check", css: "repeating-linear-gradient(0deg,#F7EDE9 0 14px,#FBF6F4 14px 28px),repeating-linear-gradient(90deg,#EFD9D2 0 14px,transparent 14px 28px)" },
+  { id: "marble", label: "Marble", css: "radial-gradient(at 20% 30%,#FFFFFF,transparent 45%),radial-gradient(at 75% 65%,#FFFFFF,transparent 40%),linear-gradient(135deg,#EFEFEA,#E6E7E0)" },
+];
+
 /* Recipes shipped with the app. Ingredients are written in pantry terms so the
    matcher can do its job; "staples" are things almost everyone has and are
    weighted far less when deciding whether you can cook something. */
