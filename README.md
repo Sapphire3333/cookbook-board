@@ -39,6 +39,17 @@ syncs too.
 - A **Notes** box underneath for everything that isn't a step: what to serve it
   with, what to change next time, who liked it
 
+**Cook mode** — for actually cooking, not writing
+- One tap from any meal: large type, ingredients pinned at the top, nothing
+  editable so you can't wreck the recipe with wet hands
+- Tap a step to tick it off; a progress bar shows how far through you are
+- **The screen is kept awake** while you're in it (where the browser allows it —
+  it says so plainly when it can't)
+- **Tap any time in a step to start a timer.** "Roast for 1 hour 20 minutes"
+  becomes one 80-minute countdown, not two. Run as many as you need at once —
+  they show in a bar at the bottom, keep correct time in a background tab, and
+  ring and buzz when they're up. *+1* adds a minute or snoozes a finished one.
+
 **The meal page**
 - **View / Arrange / Draw** modes
 - Photos by **upload, paste or drag-and-drop**, auto-downscaled to 1200px and
@@ -78,6 +89,15 @@ syncs too.
   nagged about staples
 - Add any built-in recipe to your own meals in one click
 
+**Shopping list**
+- Tick the meals you're cooking this week and the list builds itself: everything
+  those recipes need that your pantry doesn't have
+- **Grouped by aisle** — spices, vegetables, meat, tins, dairy — in the order
+  you'd walk a shop
+- Each line says which meals wanted it, so you know whether one onion is enough
+- Tick things off as you shop, add anything else by hand, copy the lot as text
+- Survives closing the app, so you can build it at home and use it in the shop
+
 **Temps & times**
 - Charts in **°C** for **oven, air fryer and pan** across ~60 common foods —
   chicken, chips, fish, vegetables, baking, eggs, rice and pasta
@@ -111,6 +131,9 @@ syncs too.
 
 **Safety nets**
 - Autosaves about 1.5 seconds after you stop changing things, plus a manual Save
+- **Deleting a meal asks first**, and takes a snapshot before it goes — the
+  confirmation tells you how many photos are involved, and the message afterwards
+  gives you the 4-digit code that brings it all back
 - **Numbered backups**: snapshots kept inside the browser, each with a **4-digit
   code** — type the code to restore that version. One is taken automatically the
   first time you save each day, and another right before any restore, so
@@ -197,8 +220,10 @@ here without any conversion.
 
 - **Local first.** The copy in your browser is the source of truth. Nothing waits on
   the network.
-- **Sync on demand and on sign-in.** *Sync now* pushes everything newer here and
-  pulls everything newer there.
+- **It syncs itself.** A few seconds after your edits settle they go up; coming
+  back to the tab, or back online, pulls down whatever your other devices did.
+  *Sync now* is still there, but you shouldn't need it. A sync that finds nothing
+  stays quiet rather than interrupting you.
 - **Conflicts** are resolved per meal by edit time — the newest edit wins.
 - **Photos** go to your private storage bucket as JPEGs, one file per photo, and are
   only downloaded once per device. Meal rows stay small however many photos you add.
@@ -253,7 +278,7 @@ IndexedDB database **`cookbook`**, three stores:
 | `meals` | One record per meal — everything except the photo bytes. |
 | `images` | One JPEG blob per photo, keyed `<mealId>__<itemId>`. |
 | `backups` | Numbered snapshots, keyed by their 4-digit code. |
-| `meta` | `settings` (frame theme), `index` (meal order), `pantry`, `customTemps`, `background`, `deletions` (tombstones). |
+| `meta` | `settings` (frame theme), `index` (meal order), `pantry`, `customTemps`, `background`, `shopping`, `deletions` (tombstones). |
 
 Your chosen background picture is stored in `images` under the reserved key
 `__background__`, so it belongs to no meal and the clean-up pass leaves it alone.

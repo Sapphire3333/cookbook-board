@@ -371,6 +371,85 @@ select,input[type=number]{border:1px solid var(--line-dark);border-radius:7px;pa
 .bg-label{position:absolute;left:0;right:0;bottom:0;background:rgba(255,255,255,.82);color:var(--ink);
   font-size:10.5px;padding:2px 4px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
+/* ---- cook mode ---- */
+.btn-cook{background:var(--paprika);border-color:var(--paprika);color:#fff;font-weight:600}
+.btn-cook:hover{background:#B84F1E;border-color:#B84F1E}
+.danger-zone{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:26px;padding-top:14px;
+  border-top:1px dashed var(--line)}
+.cook{position:fixed;inset:0;z-index:1200;background:var(--panel);overflow-y:auto;
+  font:17px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:var(--ink);
+  overscroll-behavior:contain;padding-bottom:120px}
+.cook-top{position:sticky;top:0;z-index:2;background:var(--panel);border-bottom:1px solid var(--line);
+  display:flex;align-items:center;gap:14px;padding:12px 18px}
+.cook-exit{flex-shrink:0}
+.cook-title{display:flex;flex-direction:column;min-width:0}
+.cook-title b{font-family:Georgia,serif;font-size:20px;color:var(--herb-dark);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cook-title span{font-size:13px;color:var(--muted)}
+.cook-cover{margin-left:auto;width:56px;height:56px;object-fit:cover;border-radius:9px;flex-shrink:0}
+.cook-progress{height:4px;background:var(--line);position:sticky;top:73px;z-index:2}
+.cook-progress div{height:100%;background:var(--herb);transition:width .2s}
+.cook-body{max-width:820px;margin:0 auto;padding:20px 18px}
+.cook-body h3{font-family:Georgia,serif;font-size:16px;color:var(--herb-dark);
+  text-transform:uppercase;letter-spacing:1px;margin:0 0 10px}
+.cook-ing{margin-bottom:28px}
+.cook-ing-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px}
+.cook-ing-item{display:flex;align-items:center;gap:9px;background:var(--bg);border:1px solid var(--line);
+  border-radius:9px;padding:9px 12px;font-size:15px;cursor:pointer;color:var(--ink);text-align:left}
+.cook-ing-item.got{opacity:.45;text-decoration:line-through}
+.cook-steps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+.cook-step{display:flex;gap:14px;align-items:flex-start;background:var(--bg);border:1px solid var(--line);
+  border-radius:12px;padding:15px 16px;cursor:pointer;transition:opacity .15s,background .15s}
+.cook-step:hover{border-color:var(--herb)}
+.cook-n{flex-shrink:0;width:34px;height:34px;border-radius:50%;background:var(--herb);color:#fff;
+  font-size:16px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.cook-text{font-size:19px;line-height:1.55}
+.cook-done{opacity:.42;background:var(--panel)}
+.cook-done .cook-text{text-decoration:line-through}
+.cook-done .cook-n{background:var(--line-dark)}
+.time-chip{display:inline-flex;align-items:center;gap:4px;background:var(--paprika);color:#fff;border:none;
+  border-radius:16px;padding:2px 11px;font:600 16px/1.4 inherit;cursor:pointer;margin:0 2px;white-space:nowrap}
+.time-chip:hover{background:#B84F1E}
+.cook-notes{margin-top:26px;background:var(--note);border-radius:12px;padding:14px 16px}
+.cook-notes p{margin:0;white-space:pre-wrap;font-size:16px}
+.cook-empty{color:var(--muted);font-size:15px}
+.cook-foot{color:var(--muted);font-size:13px;margin-top:26px;text-align:center}
+
+/* ---- timers ---- */
+.timer-bar{position:fixed;left:50%;transform:translateX(-50%);bottom:14px;z-index:1300;
+  display:flex;flex-direction:column;gap:6px;width:min(430px,calc(100vw - 24px))}
+.timer{position:relative;display:flex;align-items:center;gap:9px;background:var(--ink);color:#fff;
+  border-radius:10px;padding:9px 12px;font-size:14px;overflow:hidden;
+  box-shadow:0 4px 16px rgba(31,36,25,.35)}
+.timer-fill{position:absolute;left:0;top:0;bottom:0;background:rgba(255,255,255,.14);transition:width .3s linear}
+.timer-label,.timer-left,.timer button{position:relative;z-index:1}
+.timer-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.timer-left{font:700 16px/1 ui-monospace,SFMono-Regular,Menlo,monospace;flex-shrink:0}
+.timer button{border:none;background:rgba(255,255,255,.18);color:#fff;border-radius:6px;
+  padding:4px 8px;cursor:pointer;font-size:12px;flex-shrink:0}
+.timer button:hover{background:rgba(255,255,255,.32)}
+.timer-done{background:var(--paprika);animation:timer-ping 1s ease-in-out infinite}
+@keyframes timer-ping{0%,100%{box-shadow:0 4px 16px rgba(216,98,43,.5)}50%{box-shadow:0 4px 26px rgba(216,98,43,.95)}}
+
+/* ---- shopping list ---- */
+.shop-picker{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
+.shop-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:24px 0 10px}
+.shop-add{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.shop-add input{flex:1;min-width:220px;border:1px solid var(--line-dark);border-radius:7px;padding:7px 11px;
+  font-size:14px;background:var(--panel);color:var(--ink)}
+.shop-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
+.shop-aisle{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.shop-aisle h4{margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+.shop-item{display:flex;align-items:center;gap:9px;width:100%;background:none;border:none;
+  border-bottom:1px solid var(--line);padding:9px 2px;cursor:pointer;text-align:left;color:var(--ink);font-size:14px}
+.shop-item:last-child{border-bottom:none}
+.shop-name{flex-shrink:0}
+.shop-for{margin-left:auto;color:var(--muted);font-size:11px;text-align:right;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:45%}
+.shop-got{opacity:.42}
+.shop-got .shop-name{text-decoration:line-through}
+.shop-x{color:var(--muted);padding:0 4px;flex-shrink:0}
+
 /* ---- modal (paste a recipe, restore confirmation) ---- */
 .modal-back{position:fixed;inset:0;background:rgba(31,36,25,.45);z-index:200;display:flex;
   align-items:center;justify-content:center;padding:16px}
@@ -442,6 +521,16 @@ select,input[type=number]{border:1px solid var(--line-dark);border-radius:7px;pa
   .ing-filter{margin-left:0;width:100%}
   .bg-grid{grid-template-columns:repeat(auto-fill,minmax(88px,1fr))}
   .steps-head{flex-wrap:wrap}
+  .cook-body{padding:16px 14px}
+  .cook-text{font-size:18px}
+  .cook-top{padding:10px 14px;gap:10px}
+  .cook-title b{font-size:17px}
+  .cook-cover{width:44px;height:44px}
+  .cook-progress{top:65px}
+  .cook-ing-list{grid-template-columns:1fr}
+  .shop-list{grid-template-columns:1fr}
+  .shop-head .store-btns{margin-left:0}
+  .timer-bar{bottom:10px}
 }
 </style>
 </head>

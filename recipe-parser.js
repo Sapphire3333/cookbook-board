@@ -21,7 +21,7 @@
 
   const ING_HEAD = /^(ingredients?|you(?:'ll)? will need|you'll need|shopping list|for the\b.*)[:\s]*$/i;
   const STEP_HEAD = /^(method|instructions?|directions?|steps?|preparation|how to (?:make|cook) it|to cook)[:\s]*$/i;
-  const NOISE = /^(share|save|print|jump to recipe|rate this|advertisement|photograph|photo|image|by |serves?$|prep time$|cook time$|total time$|nutrition|calories|difficulty|equipment|tags?|cuisine|course|author|published|updated|\d+ comments?|reviews?)/i;
+  const NOISE = /^(share|save|print|jump to recipe|rate this|advertisement|photograph|photo|image|by |serves?\b\s*\d*$|servings?\b|makes\s+\d|yield|prep(?:aration)?\s*time|cook(?:ing)?\s*time|total\s*time|ready in|nutrition|calories|difficulty|equipment|tags?|cuisine|course|author|published|updated|\d+ comments?|reviews?)/i;
 
   /* A line that opens with a quantity, a fraction, or "a/an <unit>". */
   const startsWithQuantity = (l) =>
@@ -112,7 +112,9 @@
       if (l.length < 4 || l.length > 70) continue;
       if (ING_HEAD.test(l) || STEP_HEAD.test(l) || NOISE.test(l)) continue;
       if (startsWithQuantity(l)) continue;
-      if (isStepish(l)) continue;                                    // an instruction, not a title
+      // An instruction, not a title. Length matters: "Roast Chicken" is a dish,
+      // "Roast the chicken for an hour" is a step, and both start with a verb.
+      if (isStepish(l) && l.split(/\s+/).length > 4) continue;
       if (/[.!?]$/.test(l) && l.split(/\s+/).length > 9) continue;   // a sentence, not a title
       return l.replace(/^#+\s*/, "").trim();
     }
@@ -241,5 +243,79 @@
     };
   }
 
-  window.RecipeParser = { parseRecipe, ingredientKey };
+  /* ---------- durations inside a step ---------- */
+
+  /* "roast for 35-40 minutes"  ->  one hit, 35 min, covering that phrase.
+     Ranges take the LOWER bound: you want the alarm when it might be ready,
+     not once it's certainly overdone. Bare "m" and "s" are deliberately not
+     units here — they match far too much ordinary text. */
+  const DUR_RE = /(\d+(?:[.,]\d+)?)\s*(?:\s*(?:-|–|—|to)\s*\d+(?:[.,]\d+)?)?\s*(hours?|hrs?|hr|h|minutes?|mins?|min|seconds?|secs?|sec)\b/gi;
+
+  /* Never rounds a compound away: 90 seconds reads "1 min 30 sec", not "2 min". */
+  function durationLabel(seconds) {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    if (h) return h + " h" + (m ? " " + m + " min" : "");
+    if (m) return m + " min" + (s ? " " + s + " sec" : "");
+    return s + " sec";
+  }
+
+  function findDurations(text) {
+    const out = [];
+    const s = String(text || "");
+    DUR_RE.lastIndex = 0;
+    let m;
+    while ((m = DUR_RE.exec(s))) {
+      const n = parseFloat(m[1].replace(",", "."));
+      if (!isFinite(n) || n <= 0) continue;
+      const unit = m[2].toLowerCase();
+      let seconds;
+      let label;
+      if (/^h/.test(unit)) { seconds = Math.round(n * 3600); label = n + (n === 1 ? " hour" : " hours"); }
+      else if (/^m/.test(unit)) { seconds = Math.round(n * 60); label = n + " min"; }
+      else { seconds = Math.round(n); label = n + " sec"; }
+      if (seconds < 5 || seconds > 24 * 3600) continue;   // not a cooking time
+      out.push({ start: m.index, end: m.index + m[0].length, text: m[0].trim(), seconds, label, unit });
+    }
+
+    /* "1 hour 20 minutes" arrives as two separate hits. Anyone reading that
+       means one timer of eighty minutes, so fold a smaller unit into the larger
+       one directly before it. */
+    const merged = [];
+    for (const hit of out) {
+      const prev = merged[merged.length - 1];
+      const gap = prev ? s.slice(prev.end, hit.start) : null;
+      const finerThanPrev = prev &&
+        ((/^h/.test(prev.unit) && /^[ms]/.test(hit.unit)) || (/^m/.test(prev.unit) && /^s/.test(hit.unit)));
+      if (prev && finerThanPrev && /^[\s,]*(?:and\s+)?$/i.test(gap)) {
+        prev.end = hit.end;
+        prev.seconds += hit.seconds;
+        prev.text = s.slice(prev.start, prev.end).trim();
+        prev.label = durationLabel(prev.seconds);
+        continue;
+      }
+      merged.push(hit);
+    }
+    return merged;
+  }
+
+  /* Splits a step into plain-text and duration pieces so the UI can render the
+     durations as something you can tap. */
+  function splitByDurations(text) {
+    const s = String(text || "");
+    const hits = findDurations(s);
+    if (!hits.length) return [{ kind: "text", text: s }];
+    const parts = [];
+    let at = 0;
+    for (const h of hits) {
+      if (h.start > at) parts.push({ kind: "text", text: s.slice(at, h.start) });
+      parts.push({ kind: "time", text: s.slice(h.start, h.end), seconds: h.seconds, label: h.label });
+      at = h.end;
+    }
+    if (at < s.length) parts.push({ kind: "text", text: s.slice(at) });
+    return parts;
+  }
+
+  window.RecipeParser = { parseRecipe, ingredientKey, findDurations, splitByDurations };
 })();

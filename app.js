@@ -424,6 +424,116 @@ const Sync = {
 };
 
 /* ------------------------------------------------------------------ */
+/*  Timers                                                             */
+/*  Countdowns are stored as an end time, not a decrementing number, so */
+/*  they stay accurate while the tab is in the background — browsers    */
+/*  throttle timers there, but the clock keeps moving.                  */
+/* ------------------------------------------------------------------ */
+let audioCtx = null;
+
+/* Built the first time you start a timer, which is a real tap, so the browser
+   lets it make sound later when the timer actually finishes. */
+function primeAudio() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    if (!audioCtx) audioCtx = new Ctx();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+  } catch { /* no audio on this device */ }
+}
+function alarm() {
+  try {
+    if (!audioCtx) return;
+    const now = audioCtx.currentTime;
+    [0, 0.32, 0.64, 0.96].forEach((t) => {
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.type = "sine";
+      o.frequency.setValueAtTime(880, now + t);
+      g.gain.setValueAtTime(0.0001, now + t);
+      g.gain.exponentialRampToValueAtTime(0.35, now + t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + t + 0.24);
+      o.connect(g); g.connect(audioCtx.destination);
+      o.start(now + t); o.stop(now + t + 0.26);
+    });
+  } catch { /* sound is a bonus, never a requirement */ }
+  try { if (navigator.vibrate) navigator.vibrate([300, 120, 300, 120, 500]); } catch { /* no vibration */ }
+}
+const mmss = (s) => {
+  const sec = Math.max(0, Math.round(s));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), ss = sec % 60;
+  return (h ? h + ":" + String(m).padStart(2, "0") : String(m)) + ":" + String(ss).padStart(2, "0");
+};
+
+function useTimers() {
+  const [timers, setTimers] = useState([]);
+  const [, force] = useState(0);
+  const rang = useRef(new Set());
+
+  useEffect(() => {
+    if (!timers.some((t) => !t.done)) return;
+    const id = setInterval(() => force((n) => n + 1), 250);
+    return () => clearInterval(id);
+  }, [timers]);
+
+  // Ringing is a side effect of time passing, so it belongs here rather than
+  // in the render that noticed it.
+  useEffect(() => {
+    const check = () => {
+      const now = Date.now();
+      let changed = false;
+      for (const t of timers) {
+        if (!t.done && now >= t.endsAt && !rang.current.has(t.id)) {
+          rang.current.add(t.id);
+          alarm();
+          changed = true;
+        }
+      }
+      if (changed) setTimers((ts) => ts.map((t) => (Date.now() >= t.endsAt ? { ...t, done: true } : t)));
+    };
+    const id = setInterval(check, 300);
+    return () => clearInterval(id);
+  }, [timers]);
+
+  const start = (seconds, label) => {
+    primeAudio();
+    const t = { id: uid(), label: label || mmss(seconds), total: seconds, endsAt: Date.now() + seconds * 1000, done: false };
+    setTimers((ts) => [...ts, t]);
+    return t.id;
+  };
+  const stop = (id) => { rang.current.delete(id); setTimers((ts) => ts.filter((t) => t.id !== id)); };
+  const addMinute = (id) => setTimers((ts) => ts.map((t) => {
+    if (t.id !== id) return t;
+    rang.current.delete(id);
+    return { ...t, done: false, endsAt: Math.max(Date.now(), t.endsAt) + 60000, total: t.total + 60 };
+  }));
+
+  return { timers, start, stop, addMinute };
+}
+
+function TimerBar({ timers, stop, addMinute }) {
+  if (!timers.length) return null;
+  return html`
+    <div className="timer-bar">
+      ${timers.map((t) => {
+        const left = (t.endsAt - Date.now()) / 1000;
+        const done = left <= 0;
+        const pct = Math.max(0, Math.min(100, (left / t.total) * 100));
+        return html`
+          <div key=${t.id} className=${"timer" + (done ? " timer-done" : "")}>
+            <div className="timer-fill" style=${{ width: pct + "%" }}></div>
+            <span className="timer-label">${t.label}</span>
+            <span className="timer-left">${done ? "done!" : mmss(left)}</span>
+            ${done
+              ? html`<button title="Snooze one minute" onClick=${() => addMinute(t.id)}>+1</button>`
+              : html`<button title="Add a minute" onClick=${() => addMinute(t.id)}>+1</button>`}
+            <button title="Clear this timer" onClick=${() => stop(t.id)}>✕</button>
+          </div>`;
+      })}
+    </div>`;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Geometry                                                           */
 /* ------------------------------------------------------------------ */
 function strokeBBoxCenter(s) {
@@ -938,9 +1048,120 @@ function Steps({ instructions, onChange }) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Cook mode                                                          */
+/*  For following a recipe with your hands full: big type, tap a step   */
+/*  to tick it off, nothing editable so you can't wreck the recipe by   */
+/*  leaning on the screen, and the display kept awake.                  */
+/* ------------------------------------------------------------------ */
+function CookMode({ meal, onClose, timers }) {
+  const [done, setDone] = useState({});
+  const [got, setGot] = useState({});
+  const [wake, setWake] = useState("off");
+  const lockRef = useRef(null);
+  const steps = stepsOf(meal.instructions);
+  const ingredients = meal.ingredients || [];
+
+  /* Keep the screen on. Not every browser has this — when it's missing we say
+     so rather than pretending, because a screen that sleeps mid-recipe is
+     exactly the annoyance this mode exists to remove. */
+  useEffect(() => {
+    let cancelled = false;
+    const acquire = async () => {
+      if (!navigator.wakeLock) { setWake("unsupported"); return; }
+      try {
+        const l = await navigator.wakeLock.request("screen");
+        if (cancelled) { l.release(); return; }
+        lockRef.current = l;
+        setWake("on");
+        l.addEventListener("release", () => setWake("off"));
+      } catch { setWake("failed"); }
+    };
+    acquire();
+    const onVis = () => { if (document.visibilityState === "visible" && !cancelled) acquire(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVis);
+      try { if (lockRef.current) lockRef.current.release(); } catch { /* already released */ }
+      lockRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const doneCount = steps.filter((_, i) => done[i]).length;
+  const cover = coverOf(meal);
+
+  const renderStep = (text) => Parser.splitByDurations(text).map((p, i) =>
+    p.kind === "text"
+      ? html`<span key=${i}>${p.text}</span>`
+      : html`
+        <button key=${i} className="time-chip" title=${"Start a " + p.label + " timer"}
+          onClick=${(e) => { e.stopPropagation(); timers.start(p.seconds, p.label); }}>
+          ⏱ ${p.text.trim()}
+        </button>`);
+
+  return html`
+    <div className="cook">
+      <header className="cook-top">
+        <button className="btn cook-exit" onClick=${onClose}>✕ Done cooking</button>
+        <div className="cook-title">
+          <b>${meal.name}</b>
+          <span>${meal.device} · ${meal.prepTime} min${doneCount ? " · " + doneCount + " of " + steps.length + " done" : ""}</span>
+        </div>
+        ${cover && cover.src && html`<img className="cook-cover" src=${cover.src} alt="" />`}
+      </header>
+
+      <div className="cook-progress"><div style=${{ width: steps.length ? (doneCount / steps.length) * 100 + "%" : "0%" }}></div></div>
+
+      <div className="cook-body">
+        ${ingredients.length > 0 && html`
+          <section className="cook-ing">
+            <h3>Ingredients</h3>
+            <div className="cook-ing-list">
+              ${ingredients.map((ing, i) => html`
+                <button key=${i} className=${"cook-ing-item" + (got[i] ? " got" : "")}
+                  onClick=${() => setGot((g) => ({ ...g, [i]: !g[i] }))}>
+                  <span className="chk-box">${got[i] ? "✓" : ""}</span>${ing}
+                </button>`)}
+            </div>
+          </section>`}
+
+        <section>
+          <h3>Method</h3>
+          ${steps.length === 0 && html`
+            <p className="cook-empty">This meal has no steps yet. Add some on the meal page and they'll show up here.</p>`}
+          <ol className="cook-steps">
+            ${steps.map((s, i) => html`
+              <li key=${i} className=${"cook-step" + (done[i] ? " cook-done" : "")}
+                onClick=${() => setDone((d) => ({ ...d, [i]: !d[i] }))}>
+                <span className="cook-n">${done[i] ? "✓" : i + 1}</span>
+                <span className="cook-text">${renderStep(s)}</span>
+              </li>`)}
+          </ol>
+        </section>
+
+        ${meal.notes && html`
+          <section className="cook-notes"><h3>Notes</h3><p>${meal.notes}</p></section>`}
+
+        <p className="cook-foot">
+          Tap a step to tick it off. Tap a time to start a timer.
+          ${wake === "on" ? " The screen is being kept awake." : ""}
+          ${wake === "unsupported" ? " This browser can't keep the screen awake — you may want to lengthen its sleep timeout." : ""}
+          ${wake === "failed" ? " Couldn't keep the screen awake on this device." : ""}
+        </p>
+      </div>
+    </div>`;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Meal detail                                                        */
 /* ------------------------------------------------------------------ */
-function MealDetail({ meal, update, onDelete, have, onPasteRecipe }) {
+function MealDetail({ meal, update, onDelete, have, onPasteRecipe, onCook }) {
   const [mode, setMode] = useState("view");
   const [tool, setTool] = useState("pen");
   const [color, setColor] = useState("#D8341F");
@@ -1068,7 +1289,6 @@ function MealDetail({ meal, update, onDelete, have, onPasteRecipe }) {
                 onChange=${(e) => update((m) => ({ ...m, rating: Math.min(10, Math.max(1, +e.target.value || 1)) }))} /> / 10
             </span>
           </label>
-          <button className="btn btn-danger" onClick=${onDelete}>Delete meal</button>
         </div>
 
         <${Ingredients} list=${meal.ingredients || []} have=${have}
@@ -1125,6 +1345,7 @@ function MealDetail({ meal, update, onDelete, have, onPasteRecipe }) {
       </div>
 
       <div className="toolbar">
+        <button className="btn btn-cook" onClick=${onCook}>▶ Cook this</button>
         <div className="mode-seg">
           ${["view", "arrange", "draw"].map((mo) => html`
             <button key=${mo} className=${mode === mo ? "seg-on" : ""} onClick=${() => setMode(mo)}>
@@ -1177,6 +1398,11 @@ function MealDetail({ meal, update, onDelete, have, onPasteRecipe }) {
       <h3 className="sec-h">Notes</h3>
       <textarea className="instructions" value=${meal.notes || ""} onChange=${set("notes")}
         placeholder=${"Anything that isn't a step — what to serve it with, what to change next time, who liked it."} />
+
+      <div className="danger-zone">
+        <button className="btn btn-danger" onClick=${onDelete}>Delete this meal</button>
+        <span className="hint">a backup is taken first, so it can be brought back</span>
+      </div>
 
       <${PageCanvas} meal=${meal} mode=${mode} draw=${{ tool, color, size }} update=${update} pageRef=${pageRef} />
     </div>`;
@@ -1427,7 +1653,149 @@ function TempsTab({ meals, onInsert, customTemps, setCustomTemps }) {
 /* ------------------------------------------------------------------ */
 /*  What can I cook?                                                   */
 /* ------------------------------------------------------------------ */
-function PantryTab({ meals, pantry, setPantry, onOpen, onAddStarter }) {
+/* Which aisle an ingredient belongs to, worked out from the pantry catalogue.
+   Anything unrecognised goes to the bottom under "Other". */
+function aisleOf(name) {
+  const keys = matchKeys(Parser.ingredientKey(name) || name).filter((k) => k && k.length >= 3);
+  /* Exact names first. Without this "tomato puree" is filed under Vegetables,
+     because it contains "tomato" and that group is listed earlier. */
+  for (const g of PANTRY_GROUPS) {
+    for (const item of g.items) if (keys.includes(item)) return g.group;
+  }
+  for (const g of PANTRY_GROUPS) {
+    for (const item of g.items) {
+      for (const k of keys) if (k.includes(item) || item.includes(k)) return g.group;
+    }
+  }
+  return "Other";
+}
+
+function ShoppingList({ meals, pantry, shopping, setShopping }) {
+  const [extra, setExtra] = useState("");
+  const chosen = shopping.mealIds || [];
+  const ticked = shopping.ticked || {};
+
+  const have = useMemo(() => {
+    const s = new Set();
+    for (const k of Object.keys(pantry.have || {})) if (pantry.have[k]) matchKeys(k).forEach((x) => s.add(x));
+    return s;
+  }, [pantry]);
+
+  const toggleMeal = (id) => setShopping((s) => ({
+    ...s,
+    mealIds: (s.mealIds || []).includes(id)
+      ? (s.mealIds || []).filter((x) => x !== id)
+      : [...(s.mealIds || []), id],
+  }));
+
+  /* One line per thing to buy, remembering which meals wanted it — seeing
+     "onion — carbonara, chilli" is the difference between buying one and
+     buying enough. */
+  const list = useMemo(() => {
+    const byKey = new Map();
+    for (const id of chosen) {
+      const meal = meals.find((m) => m.id === id);
+      if (!meal) continue;
+      for (const raw of meal.ingredients || []) {
+        const key = normalize(Parser.ingredientKey(raw) || raw);
+        if (!key) continue;
+        if (pantryHas(have, raw) || STAPLES.has(key)) continue;
+        const hit = byKey.get(key) || { key, name: raw, forMeals: [], aisle: aisleOf(raw) };
+        if (!hit.forMeals.includes(meal.name)) hit.forMeals.push(meal.name);
+        byKey.set(key, hit);
+      }
+    }
+    for (const x of shopping.extra || []) {
+      const key = normalize(x);
+      if (!byKey.has(key)) byKey.set(key, { key, name: x, forMeals: [], aisle: aisleOf(x), manual: true });
+    }
+    const groups = new Map();
+    for (const item of byKey.values()) {
+      if (!groups.has(item.aisle)) groups.set(item.aisle, []);
+      groups.get(item.aisle).push(item);
+    }
+    const order = PANTRY_GROUPS.map((g) => g.group).concat("Other");
+    return [...groups.entries()]
+      .sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]))
+      .map(([aisle, items]) => [aisle, items.sort((a, b) => a.name.localeCompare(b.name))]);
+  }, [chosen, meals, have, shopping.extra]);
+
+  const total = list.reduce((n, [, items]) => n + items.length, 0);
+  const left = list.reduce((n, [, items]) => n + items.filter((i) => !ticked[i.key]).length, 0);
+
+  const addExtra = () => {
+    const parts = extra.split(",").map((s) => s.trim()).filter(Boolean);
+    if (!parts.length) return;
+    setShopping((s) => ({ ...s, extra: [...new Set([...(s.extra || []), ...parts])] }));
+    setExtra("");
+  };
+  const asText = () => list.map(([aisle, items]) =>
+    aisle + "\n" + items.map((i) => (ticked[i.key] ? "[x] " : "[ ] ") + i.name).join("\n")).join("\n\n");
+
+  return html`
+    <${Frag}>
+      <h3 className="sec-h">Pick the meals you're cooking</h3>
+      <p className="sub">
+        Anything already ticked in your pantry is left off the list, as are staples like salt and oil.
+      </p>
+      ${meals.length === 0
+        ? html`<p className="sub">No meals yet — add some first.</p>`
+        : html`
+          <div className="shop-picker">
+            ${meals.map((m) => html`
+              <${Check} key=${m.id} on=${chosen.includes(m.id)} onClick=${() => toggleMeal(m.id)}>${m.name}<//>`)}
+          </div>`}
+
+      <div className="shop-head">
+        <h3 className="sec-h" style=${{ margin: 0 }}>
+          Shopping list ${total > 0 ? html`<span className="count">(${left} of ${total} left)</span>` : ""}
+        </h3>
+        ${total > 0 && html`
+          <div className="store-btns" style=${{ marginLeft: "auto" }}>
+            <button className="btn" onClick=${() => { navigator.clipboard?.writeText(asText()); }}>Copy as text</button>
+            <button className="btn" onClick=${() => setShopping((s) => ({ ...s, ticked: {} }))}>Untick all</button>
+            <button className="btn" onClick=${() => setShopping({ mealIds: [], ticked: {}, extra: [] })}>Start over</button>
+          </div>`}
+      </div>
+
+      <div className="shop-add">
+        <input value=${extra} placeholder="add something else — comma-separated is fine"
+          onChange=${(e) => setExtra(e.target.value)}
+          onKeyDown=${(e) => { if (e.key === "Enter") { e.preventDefault(); addExtra(); } }} />
+        <button className="btn" onClick=${addExtra}>Add</button>
+      </div>
+
+      ${total === 0
+        ? html`<p className="sub">
+            ${chosen.length
+              ? "Nothing to buy — you already have everything for those meals."
+              : "Tick a meal above, or add something by hand, and the list builds itself."}
+          </p>`
+        : html`
+          <div className="shop-list">
+            ${list.map(([aisle, items]) => html`
+              <div key=${aisle} className="shop-aisle">
+                <h4>${aisle}</h4>
+                ${items.map((i) => html`
+                  <button key=${i.key} className=${"shop-item" + (ticked[i.key] ? " shop-got" : "")}
+                    onClick=${() => setShopping((s) => ({ ...s, ticked: { ...s.ticked, [i.key]: !(s.ticked || {})[i.key] } }))}>
+                    <span className="chk-box">${ticked[i.key] ? "✓" : ""}</span>
+                    <span className="shop-name">${i.name}</span>
+                    ${i.forMeals.length > 0
+                      ? html`<span className="shop-for">${i.forMeals.join(", ")}</span>`
+                      : html`<span className="shop-for">added by hand</span>`}
+                    ${i.manual && html`
+                      <span className="shop-x" onClick=${(e) => {
+                        e.stopPropagation();
+                        setShopping((s) => ({ ...s, extra: (s.extra || []).filter((x) => normalize(x) !== i.key) }));
+                      }}>✕</span>`}
+                  </button>`)}
+              </div>`)}
+          </div>`}
+    <//>`;
+}
+
+function PantryTab({ meals, pantry, setPantry, onOpen, onAddStarter, shopping, setShopping }) {
   const [tab, setTab] = useState("suggest");
   const [draft, setDraft] = useState("");
   const [onlyComplete, setOnlyComplete] = useState(false);
@@ -1482,9 +1850,12 @@ function PantryTab({ meals, pantry, setPantry, onOpen, onAddStarter }) {
       <div className="pantry-tabs">
         <button className=${tab === "suggest" ? "seg-on" : ""} onClick=${() => setTab("suggest")}>Suggest a meal</button>
         <button className=${tab === "pantry" ? "seg-on" : ""} onClick=${() => setTab("pantry")}>My pantry (${haveCount})</button>
+        <button className=${tab === "shop" ? "seg-on" : ""} onClick=${() => setTab("shop")}>Shopping list</button>
       </div>
 
-      ${tab === "pantry" ? html`
+      ${tab === "shop" ? html`
+        <${ShoppingList} meals=${meals} pantry=${pantry} shopping=${shopping} setShopping=${setShopping} />`
+      : tab === "pantry" ? html`
         <${Frag}>
           <h3 className="sec-h">What have you got in?</h3>
           <p className="sub">Tick everything you have. Salt, pepper, oil, flour, sugar, onion and garlic are assumed — no need to tick those unless you like.</p>
@@ -1992,6 +2363,12 @@ function CookingOrganizer() {
   const [pasteOpen, setPasteOpen] = useState(false);
   const [background, setBackgroundState] = useState({ id: "paper", custom: false });
   const [customBgUrl, setCustomBgUrl] = useState(null);
+  const [shopping, setShoppingState] = useState({ mealIds: [], ticked: {}, extra: [] });
+  const [cookId, setCookId] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const timers = useTimers();
+  const unsynced = useRef(false);          // real edits made here since the last sync
+  const lastSyncAt = useRef(0);
   const savedIds = useRef([]);
   const deletions = useRef({});
   const autoTimer = useRef(null);
@@ -2063,6 +2440,10 @@ function CookingOrganizer() {
         const blob = await idb.get("images", BG_KEY);
         if (blob) setCustomBgUrl(urlFor(BG_KEY, blob));
       } catch { /* no background chosen yet */ }
+      try {
+        const s = await idb.get("meta", "shopping");
+        if (s && Array.isArray(s.mealIds)) setShoppingState({ mealIds: s.mealIds, ticked: s.ticked || {}, extra: s.extra || [] });
+      } catch { /* no list yet */ }
       await loadAll();
       await refreshBackups();
       try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch { /* unsupported */ }
@@ -2105,6 +2486,12 @@ function CookingOrganizer() {
     idb.put("meta", customTemps, "customTemps").catch(() => { });
     if (Sync.user) Sync.setMeta("customTemps", customTemps).catch(() => { });
   }, [customTemps, ready]);
+
+  const setShopping = setShoppingState;
+  useEffect(() => {
+    if (!ready) return;
+    idb.put("meta", shopping, "shopping").catch(() => { });
+  }, [shopping, ready]);
 
   const setBackground = (b) => {
     setBackgroundState(b);
@@ -2251,7 +2638,7 @@ function CookingOrganizer() {
         if (data.pantry && data.pantry.have) setPantry({ have: data.pantry.have, custom: data.pantry.custom || [] });
         if (Array.isArray(data.customTemps)) setCustomTemps(data.customTemps);
         setMeals(restored);
-        setDirty(true);
+        touched();
         flash("Backup loaded (" + restored.length + " meals) — press Save to keep it.");
       } catch { flash("That file doesn't look like a cookbook backup."); }
     };
@@ -2273,7 +2660,7 @@ function CookingOrganizer() {
       const restored = [];
       for (const m of b.meals) restored.push(await hydrateMeal(m));
       setMeals(restored);
-      setDirty(true);
+      touched();
       await refreshBackups();
       setTab("meals");
       flash("Restored backup " + b.code + " (" + restored.length + " meals).");
@@ -2281,21 +2668,35 @@ function CookingOrganizer() {
   };
 
   /* ---------- meal edits ---------- */
+  /* `unsynced` marks changes a person made, as opposed to changes that arrived
+     from the cloud — otherwise pulling something down would look like a local
+     edit and start an endless sync loop. */
+  const touched = () => { setDirty(true); unsynced.current = true; };
+
   const updateMeal = (id) => (fnOrPatch) => {
     setMeals((ms) => ms.map((m) => {
       if (m.id !== id) return m;
       const next = typeof fnOrPatch === "function" ? fnOrPatch(m) : { ...m, ...fnOrPatch };
       return { ...next, modified: Date.now() };
     }));
-    setDirty(true);
+    touched();
   };
   const toggleFav = (id) => updateMeal(id)((m) => ({ ...m, favorite: !m.favorite }));
-  const addMeal = () => { const m = newMeal(); setMeals((ms) => [...ms, m]); setDirty(true); setTab(m.id); };
-  const deleteMeal = (id) => {
-    deletions.current = { ...deletions.current, [id]: Date.now() };
-    setMeals((ms) => ms.filter((m) => m.id !== id));
-    setDirty(true);
+  const addMeal = () => { const m = newMeal(); setMeals((ms) => [...ms, m]); touched(); setTab(m.id); };
+
+  /* Deleting takes a snapshot first, so the 4-digit code in the toast is a real
+     way back rather than a consolation. */
+  const reallyDelete = async (meal) => {
+    setConfirmDelete(null);
+    let code = null;
+    try { code = await createBackup(mealsRef.current, "before deleting " + meal.name); await refreshBackups(); }
+    catch { /* a failed snapshot must not block the delete the user asked for */ }
+    deletions.current = { ...deletions.current, [meal.id]: Date.now() };
+    setMeals((ms) => ms.filter((m) => m.id !== meal.id));
+    touched();
     setTab("meals");
+    flash(code ? "Deleted “" + meal.name + "”. Backup " + code + " has it if you want it back."
+               : "Deleted “" + meal.name + "”.");
   };
 
   /* Drop a table onto a meal's page, below whatever is already there. */
@@ -2329,7 +2730,7 @@ function CookingOrganizer() {
   const createFromRecipe = (p) => {
     const m = mealFromRecipe(p);
     setMeals((ms) => [...ms, m]);
-    setDirty(true);
+    touched();
     setPasteOpen(false);
     setTab(m.id);
     flash("Created “" + m.name + "” — check it over.");
@@ -2356,7 +2757,7 @@ function CookingOrganizer() {
       ingredients: [...recipe.ingredients], instructions: recipe.instructions,
     };
     setMeals((ms) => [...ms, m]);
-    setDirty(true);
+    touched();
     setTab(m.id);
     flash("Added “" + m.name + "” to your meals.");
   };
@@ -2430,9 +2831,16 @@ function CookingOrganizer() {
       else await Sync.setMeta("customTemps", customTemps);
 
       setDirty(true);
+      unsynced.current = false;
+      lastSyncAt.current = Date.now();
       setLastSync(new Date().toLocaleTimeString());
-      flash("Synced ✓ (" + pushed.length + " up, " + pulled.length + " down)");
+      // Only shout about it when something actually moved; a quiet background
+      // sync that found nothing shouldn't interrupt you.
+      if (pushed.length || pulled.length) {
+        flash("Synced ✓ (" + pushed.length + " up, " + pulled.length + " down)");
+      }
     } catch (err) {
+      lastSyncAt.current = Date.now();   // don't hammer a failing server
       flash("Sync failed: " + (err && err.message ? err.message : "unknown error"));
     } finally {
       setSyncing(false);
@@ -2446,6 +2854,36 @@ function CookingOrganizer() {
     syncedOnce.current = true;
     syncNow();
   }, [ready, user, syncNow]);
+
+  /* Auto-sync. Pressing a button to make your phone and your laptop agree is a
+     thing people forget to do, and forgetting looks exactly like data loss. */
+  const syncRef = useRef(syncNow);
+  syncRef.current = syncNow;
+
+  // After your edits have settled and been saved locally, push them up.
+  useEffect(() => {
+    if (!ready || !user || dirty || syncing || !unsynced.current) return;
+    const id = setTimeout(() => {
+      if (unsynced.current && !syncing) syncRef.current();
+    }, 3000);
+    return () => clearTimeout(id);
+  }, [ready, user, dirty, syncing, meals]);
+
+  // Coming back to the tab is the moment another device's changes matter.
+  useEffect(() => {
+    if (!user) return;
+    const onVis = () => {
+      if (document.visibilityState !== "visible") return;
+      if (Date.now() - lastSyncAt.current < 30000) return;
+      syncRef.current();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("online", onVis);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("online", onVis);
+    };
+  }, [user]);
 
   const cloud = {
     user, syncing, lastSync,
@@ -2466,6 +2904,7 @@ function CookingOrganizer() {
     onUploadCustom: uploadCustomBg, onClearCustom: clearCustomBg, busy: !ready,
   };
 
+  const cooking = meals.find((m) => m.id === cookId);
   const open = meals.find((m) => m.id === tab);
   const TABS = [
     ["meals", "Meals"], ["search", "Search"], ["pantry", "What can I cook?"],
@@ -2509,8 +2948,8 @@ function CookingOrganizer() {
         ? html`
           <div className="page">
             <button className="btn btn-ghost back" onClick=${() => setTab("meals")}>← All meals</button>
-            <${MealDetail} meal=${open} update=${updateMeal(open.id)} onDelete=${() => deleteMeal(open.id)}
-              have=${haveSet} onPasteRecipe=${() => setPasteOpen(true)} />
+            <${MealDetail} meal=${open} update=${updateMeal(open.id)} onDelete=${() => setConfirmDelete(open)}
+              have=${haveSet} onPasteRecipe=${() => setPasteOpen(true)} onCook=${() => setCookId(open.id)} />
           </div>`
         : tab === "meals"
         ? html`
@@ -2527,7 +2966,8 @@ function CookingOrganizer() {
         ? html`
           <div className="page">
             <${PantryTab} meals=${meals} pantry=${pantry} setPantry=${setPantry}
-              onOpen=${setTab} onAddStarter=${addStarter} />
+              onOpen=${setTab} onAddStarter=${addStarter}
+              shopping=${shopping} setShopping=${setShopping} />
           </div>`
         : tab === "temps"
         ? html`
@@ -2547,6 +2987,28 @@ function CookingOrganizer() {
         <${RecipePaste} onClose=${() => setPasteOpen(false)}
           onCreate=${createFromRecipe} onFill=${fillFromRecipe}
           openMealName=${open ? open.name : null} />`}
+
+      ${confirmDelete && html`
+        <div className="modal-back" onPointerDown=${(e) => { if (e.target === e.currentTarget) setConfirmDelete(null); }}>
+          <div className="modal modal-sm">
+            <div className="modal-head"><h3>Delete “${confirmDelete.name}”?</h3></div>
+            <p className="sub">
+              ${"This removes the meal, its "}
+              ${confirmDelete.items.filter((i) => i.kind === "image").length}
+              ${confirmDelete.items.filter((i) => i.kind === "image").length === 1 ? " photo" : " photos"}
+              ${" and everything on its page"}${Sync.user ? ", on this device and any other you've synced" : ""}.
+              A backup is taken first and you'll get its code, so this can be undone.
+            </p>
+            <div className="modal-btns">
+              <button className="btn btn-danger" onClick=${() => reallyDelete(confirmDelete)}>Delete it</button>
+              <button className="btn btn-primary" onClick=${() => setConfirmDelete(null)}>Keep it</button>
+            </div>
+          </div>
+        </div>`}
+
+      <${TimerBar} timers=${timers.timers} stop=${timers.stop} addMinute=${timers.addMinute} />
+
+      ${cooking && html`<${CookMode} meal=${cooking} timers=${timers} onClose=${() => setCookId(null)} />`}
 
       ${status && tab !== "overview" && html`<div className="toast">${status}</div>`}
     </div>`;
