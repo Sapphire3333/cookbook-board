@@ -712,14 +712,29 @@ select,input[type=number]{border:1px solid var(--line-dark);border-radius:7px;pa
 <body>
 <div id="root"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js" crossorigin></script>
-<script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
-<script src="https://cdn.jsdelivr.net/npm/htm@3.1.1/dist/htm.umd.js" crossorigin></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<!-- Libraries are served from this site, not a code network. They used to come
+     from cdn.jsdelivr.net, which meant every single visit depended on a third
+     party being reachable — one blocked request and the app simply didn't
+     start. These are the same files, committed alongside the app. -->
+<script src="vendor/react.production.min.js"></script>
+<script src="vendor/react-dom.production.min.js"></script>
+<script src="vendor/htm.umd.js"></script>
+<script src="vendor/supabase.js"></script>
 <script src="config.js"></script>
 <script src="data.js"></script>
 <script src="recipe-parser.js"></script>
 <script src="app.js"></script>
+
+<script>
+/* Registering the worker here rather than at the end of app.js. If app.js ever
+   fails to parse, everything after it never runs — which used to mean the very
+   failure that needed offline caching was the one that prevented it. */
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", function () {
+    navigator.serviceWorker.register("./sw.js").catch(function () { /* offline start-up won't work */ });
+  });
+}
+</script>
 
 <script>
 /* Start-up check. If the app hasn't put anything on the page shortly after
@@ -732,9 +747,9 @@ select,input[type=number]{border:1px solid var(--line-dark);border-radius:7px;pa
     if (!root || root.childElementCount > 0) return;   // the app is up — nothing to do
 
     var parts = [
-      ["React", window.React, "cdn.jsdelivr.net"],
-      ["ReactDOM", window.ReactDOM, "cdn.jsdelivr.net"],
-      ["htm", window.htm, "cdn.jsdelivr.net"],
+      ["vendor/react.production.min.js", window.React, "this site"],
+      ["vendor/react-dom.production.min.js", window.ReactDOM, "this site"],
+      ["vendor/htm.umd.js", window.htm, "this site"],
       ["config.js", window.COOKBOOK_CONFIG, "this site"],
       ["data.js", window.COOK_TEMPS, "this site"],
       ["recipe-parser.js", window.RecipeParser, "this site"],

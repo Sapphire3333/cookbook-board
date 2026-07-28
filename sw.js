@@ -5,9 +5,11 @@
 
    Deliberately never touches Supabase traffic — API and Storage requests always
    go to the network, so you can't be served a stale cookbook. */
-const CACHE = "cookbook-v2";
+const CACHE = "cookbook-v3";
 const SHELL = ["./", "./index.html", "./app.js", "./data.js", "./recipe-parser.js",
-  "./config.js", "./manifest.json", "./icon.svg"];
+  "./config.js", "./manifest.json", "./icon.svg",
+  "./vendor/react.production.min.js", "./vendor/react-dom.production.min.js",
+  "./vendor/htm.umd.js", "./vendor/supabase.js"];
 
 self.addEventListener("install", e => {
   e.waitUntil(
@@ -36,23 +38,21 @@ self.addEventListener("fetch", e => {
   // Never cache Supabase — login, meals and photos must always be live.
   if (url.hostname.endsWith("supabase.co")) return;
 
-  // React / htm / supabase-js from the CDN. Version tags float, so cached-forever
-  // would pin one build for good — serve the cached copy for speed and offline
-  // start-up, but refresh it in the background so updates do land eventually.
-  if (url.hostname === "cdn.jsdelivr.net") {
+  if (url.origin !== self.location.origin) return;
+
+  // The libraries in /vendor never change unless the app is redeployed, so they
+  // are served straight from cache. This is what makes a cold start work with no
+  // connection at all — and why a flaky moment can no longer stop the app
+  // loading, which is exactly what a code network used to do to it.
+  if (url.pathname.indexOf("/vendor/") !== -1) {
     e.respondWith(
-      caches.match(req).then(hit => {
-        const net = fetch(req).then(res => {
-          if (res && res.ok) { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); }
-          return res;
-        }).catch(() => hit);
-        return hit || net;
-      })
+      caches.match(req).then(hit => hit || fetch(req).then(res => {
+        if (res && res.ok) { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); }
+        return res;
+      }))
     );
     return;
   }
-
-  if (url.origin !== self.location.origin) return;
 
   // Our own files: network-first so updates land as soon as you're online,
   // falling back to the cached copy (and then the app shell) when you're not.

@@ -2212,7 +2212,22 @@ function PantryTab({ meals, pantry, setPantry, onOpen, onAddStarter, shopping, s
       .filter((m) => (m.ingredients || []).length)
       .map((m) => ({ id: m.id, name: m.name, mealType: m.mealType, device: m.device, prepTime: m.prepTime,
         rating: m.rating, ingredients: m.ingredients, mine: true }));
-    const pool = [...mine, ...STARTER_MEALS.map((r) => ({ ...r, mine: false }))];
+
+    /* Once you've added a built-in recipe it becomes your meal, and showing the
+       original alongside it looks exactly like a duplicate. Matched by where the
+       meal came from, and by name as well so meals added before this existed
+       aren't listed twice either. */
+    const adopted = new Set();
+    const names = new Set();
+    for (const m of meals) {
+      if (m.fromStarter) adopted.add(m.fromStarter);
+      names.add(normalize(m.name));
+    }
+    const starters = STARTER_MEALS
+      .filter((r) => !adopted.has(r.id) && !names.has(normalize(r.name)))
+      .map((r) => ({ ...r, mine: false }));
+
+    const pool = [...mine, ...starters];
     return pool
       .map((r) => ({ recipe: r, score: scoreRecipe(r, have) }))
       .filter((x) => x.score)
@@ -3257,6 +3272,7 @@ function CookingOrganizer() {
       name: recipe.name, mealType: recipe.mealType, device: recipe.device,
       prepTime: recipe.prepTime, rating: recipe.rating,
       ingredients: [...recipe.ingredients], instructions: recipe.instructions,
+      fromStarter: recipe.id,   // so the original stops being suggested alongside it
     };
     setMeals((ms) => [...ms, m]);
     touched();
@@ -3597,9 +3613,3 @@ window.__cookbookLoaded = true;
 ReactDOM.createRoot(document.getElementById("root")).render(
   html`<${ErrorBoundary}><${CookingOrganizer} /><//>`
 );
-
-if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js").catch(() => { /* offline start-up just won't work */ });
-  });
-}

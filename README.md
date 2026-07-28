@@ -315,6 +315,7 @@ are for.
 | `schema.sql` | Paste-once Supabase setup (tables, bucket, security rules). |
 | `sw.js` | Service worker so the app itself opens offline. |
 | `manifest.json`, `icon.svg` | Home-screen install bits. |
+| `vendor/` | React, ReactDOM, htm and supabase-js, served from your own site. |
 
 Want different temperatures, more pantry items, extra backgrounds or your own
 starter recipes? They all live in plain lists in `data.js` — edit that one file.
@@ -322,8 +323,12 @@ starter recipes? They all live in plain lists in `data.js` — edit that one fil
 If the app ever fails to start, it says so rather than showing a blank page: you
 get a box naming the file that didn't load and quoting the browser's error.
 
-*No build step and no npm. React, htm and `@supabase/supabase-js` are loaded from a
-CDN and cached by the service worker; nothing is compiled.*
+*No build step and no npm. The libraries in `vendor/` are ordinary files served
+from your own site — nothing is compiled, and nothing is fetched from a third
+party. They were on a public code network at first, which meant every visit
+depended on that network being reachable: one blocked request and the app simply
+didn't start, with "Didn't load: React, ReactDOM, htm" on screen. Committing them
+removed that whole class of failure and made a first visit work offline too.*
 
 ## Where things are stored
 
