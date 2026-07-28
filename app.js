@@ -331,6 +331,30 @@ function makeCode(taken) {
   return String(Date.now()).slice(-4);
 }
 
+/* How many snapshots travel to the cloud. They hold meal text, not photos, so
+   they're small — but the whole set lives in a single row, so it shouldn't grow
+   without limit. Older ones stay on the device that made them. */
+const SYNC_BACKUPS = 10;
+
+/* Two devices offline at once can both invent the same 4-digit code for
+   different snapshots. Identity is therefore the moment it was taken, not the
+   code; when codes clash the newer snapshot keeps it and the older is given a
+   fresh one, so neither is lost. */
+function mergeBackups(local, remote) {
+  const byTime = new Map();
+  for (const b of [...(remote || []), ...(local || [])]) {
+    if (!b || !b.at) continue;
+    byTime.set(b.at, { ...(byTime.get(b.at) || {}), ...b });
+  }
+  const all = [...byTime.values()].sort((a, b) => b.at - a.at);
+  const taken = new Set();
+  for (const b of all) {
+    if (!b.code || taken.has(b.code)) b.code = makeCode(taken);
+    taken.add(b.code);
+  }
+  return all.slice(0, MAX_BACKUPS);
+}
+
 /* A snapshot stores meal records and the photo keys they point at. The photos
    themselves are not copied — the orphan sweep just knows not to delete a photo
    any backup still references, so a snapshot costs a few KB however many
@@ -355,6 +379,13 @@ async function createBackup(meals, label) {
 /*  Supabase sync (optional — see config.js)                           */
 /* ------------------------------------------------------------------ */
 const BUCKET = "cookbook";
+/* Prefixed on purpose. One Supabase project can host several apps, but only if
+   they don't all reach for a table called "meta" — sharing one would mean two
+   apps overwriting each other's settings and deleted-item lists, with no error
+   to point at. These names must match schema.sql. */
+const T_MEALS = "cookbook_meals";
+const T_META = "cookbook_meta";
+
 const Sync = {
   supa: null,
   user: null,
@@ -402,7 +433,7 @@ const Sync = {
       items.push(error ? it : { ...it, remote: p });
     }
     const next = { ...meal, items };
-    const { error } = await this.supa.from("meals").upsert({
+    const { error } = await this.supa.from(T_MEALS).upsert({
       user_id: this.user.id, id: next.id,
       data: stripMeal(next), modified: next.modified || Date.now(),
     });
@@ -424,21 +455,37 @@ const Sync = {
     return meal;
   },
 
+  /* Pull down any photo this meal points at that we don't already hold. Needed
+     when restoring a snapshot that was taken on another device: the meal text
+     travelled through the meta row, but the pictures live in the bucket. */
+  async fetchPhotos(meal) {
+    if (!this.user) return;
+    for (const it of meal.items || []) {
+      if (it.kind !== "image" || !it.remote) continue;
+      const key = imgKey(meal.id, it.id);
+      try {
+        if (await idb.get("images", key)) continue;
+        const { data, error } = await this.supa.storage.from(BUCKET).download(it.remote);
+        if (!error && data) await idb.put("images", data, key);
+      } catch { /* the photo is gone from the bucket; the meal restores without it */ }
+    }
+  },
+
   async deleteMeal(mealId, items) {
     for (const it of items || []) {
       if (it.kind === "image" && it.remote) {
         try { await this.supa.storage.from(BUCKET).remove([it.remote]); } catch { /* already gone */ }
       }
     }
-    await this.supa.from("meals").delete().eq("id", mealId).eq("user_id", this.user.id);
+    await this.supa.from(T_MEALS).delete().eq("id", mealId).eq("user_id", this.user.id);
   },
 
   async getMeta(key) {
-    const { data } = await this.supa.from("meta").select("value").eq("key", key).maybeSingle();
+    const { data } = await this.supa.from(T_META).select("value").eq("key", key).maybeSingle();
     return data ? data.value : null;
   },
   async setMeta(key, value) {
-    await this.supa.from("meta").upsert({ user_id: this.user.id, key, value });
+    await this.supa.from(T_META).upsert({ user_id: this.user.id, key, value });
   },
 };
 
@@ -2269,7 +2316,7 @@ function PantryTab({ meals, pantry, setPantry, onOpen, onAddStarter, shopping, s
 /* ------------------------------------------------------------------ */
 /*  Backups                                                            */
 /* ------------------------------------------------------------------ */
-function BackupsPanel({ backups, onCreate, onRestore, onDelete, busy }) {
+function BackupsPanel({ backups, onCreate, onRestore, onDelete, busy, signedIn }) {
   const [code, setCode] = useState("");
   const [label, setLabel] = useState("");
   const [confirm, setConfirm] = useState(null);
@@ -2287,14 +2334,19 @@ function BackupsPanel({ backups, onCreate, onRestore, onDelete, busy }) {
 
   return html`
     <div className="panel cloud">
-      <div className="cloud-head">Backups in this browser</div>
+      <div className="cloud-head">${signedIn ? "Backups" : "Backups in this browser"}</div>
       <p className="sub" style=${{ margin: "0 0 8px" }}>
-        Snapshots kept alongside your cookbook — each one gets a 4-digit code. They cost almost nothing
-        because they share photos with your meals, but they live in the same browser, so a
-        <b> downloaded backup file</b> is still the one that survives anything.
+        Snapshots of your whole cookbook — each one gets a 4-digit code you can type in to bring it back.
+        ${signedIn
+          ? html`<${Frag}> They travel with your account, so a code made on one device works on the others
+              once both have synced. Photos come back too, as long as the meal still exists in the cloud. </>`
+          : html`<${Frag}> <b>These stay on this device</b> — a code made here won't work on your phone.
+              To move a cookbook between devices, use <b>Download backup</b> and <b>Restore from backup
+              file</b>, or turn on cloud sync below. </>`}
+        Either way a <b>downloaded backup file</b> is the copy that survives anything.
       </p>
       <div className="store-btns" style=${{ marginLeft: 0, marginBottom: 10 }}>
-        <span className="code-entry">
+        <span className="mk-backup">
           <input className="bk-label" value=${label} maxLength="40" placeholder="what's this backup for? (optional)"
             onChange=${(e) => setLabel(e.target.value)}
             onKeyDown=${(e) => { if (e.key === "Enter") { onCreate(label.trim()); setLabel(""); } }} />
@@ -3091,7 +3143,10 @@ function CookingOrganizer() {
     try {
       await createBackup(mealsRef.current, "before restoring " + b.code);
       const restored = [];
-      for (const m of b.meals) restored.push(await hydrateMeal(m));
+      for (const m of b.meals) {
+        await Sync.fetchPhotos(m);          // no-op when signed out or already held
+        restored.push(await hydrateMeal(m));
+      }
       setMeals(restored);
       touched();
       await refreshBackups();
@@ -3223,7 +3278,7 @@ function CookingOrganizer() {
         await Sync.deleteMeal(id, local ? local.items : []);
       }
 
-      const { data: rows, error } = await Sync.supa.from("meals").select("id,modified");
+      const { data: rows, error } = await Sync.supa.from(T_MEALS).select("id,modified");
       if (error) throw error;
       const remoteById = new Map((rows || []).map((r) => [r.id, r.modified]));
       const localById = new Map(mealsRef.current.map((m) => [m.id, m]));
@@ -3243,7 +3298,7 @@ function CookingOrganizer() {
 
       const pulled = [];
       if (wanted.length) {
-        const { data: full, error: e2 } = await Sync.supa.from("meals").select("id,data,modified").in("id", wanted);
+        const { data: full, error: e2 } = await Sync.supa.from(T_MEALS).select("id,data,modified").in("id", wanted);
         if (e2) throw e2;
         for (const row of full || []) pulled.push(await hydrateMeal(await Sync.pullMeal(row)));
       }
@@ -3262,6 +3317,17 @@ function CookingOrganizer() {
 
       deletions.current = mergedDel;
       await Sync.setMeta("deletions", mergedDel);
+
+      /* Snapshots, so a 4-digit code means the same thing on every device. */
+      try {
+        const localBk = await idb.getAll("backups");
+        const merged = mergeBackups(localBk, (await Sync.getMeta("backups")) || []);
+        const keep = new Set(merged.map((b) => b.code));
+        for (const b of localBk) if (!keep.has(b.code)) await idb.del("backups", b.code);
+        for (const b of merged) await idb.put("backups", b);
+        await Sync.setMeta("backups", merged.slice(0, SYNC_BACKUPS));
+        refreshBackups();
+      } catch { /* snapshots are a convenience; never fail a sync over them */ }
 
       const remoteSettings = await Sync.getMeta("settings");
       if (remoteSettings && remoteSettings.theme && FRAMES[remoteSettings.theme] && remoteSettings.theme !== theme) {
@@ -3293,7 +3359,7 @@ function CookingOrganizer() {
       setSyncing(false);
       refreshUsage();
     }
-  }, [saveAll, theme, pantry, customTemps, refreshUsage]);
+  }, [saveAll, theme, pantry, customTemps, refreshUsage, refreshBackups]);
 
   const syncedOnce = useRef(false);
   useEffect(() => {
@@ -3340,7 +3406,7 @@ function CookingOrganizer() {
     onSyncNow: syncNow,
   };
   const backupsPanel = {
-    backups, busy: !ready,
+    backups, busy: !ready, signedIn: !!user,
     onCreate: async (label) => {
       const c = await makeSnapshot(label || "manual");
       if (c) flash("Backup created — code " + c + (label ? " (" + label + ")" : "") + ".");

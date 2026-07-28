@@ -7,11 +7,17 @@
 --  It is safe to run more than once.
 --
 --  What it creates:
---    • table  public.meals   (one row per meal, JSON payload)
---    • table  public.meta    (settings, e.g. the frame theme, and
---                             the tombstone list of deleted meals)
---    • bucket storage "cookbook" (board photos, as JPEG files)
+--    • table  public.cookbook_meals  (one row per meal, JSON payload)
+--    • table  public.cookbook_meta   (settings, pantry, week plan, snapshots,
+--                                     and the tombstones of deleted meals)
+--    • bucket storage "cookbook"     (board photos, as JPEG files)
 --    • Row Level Security so each account only ever sees its own data.
+--
+--  Every name here begins with "cookbook_" on purpose. One Supabase project
+--  can host several apps, but only if they don't reach for the same table
+--  names — a plain "meta" table would be silently shared with any other app
+--  that wanted one, and they would overwrite each other's settings and
+--  deleted-item lists with no error to warn you.
 --
 --  Photos are NOT stored in the meals table. Each board photo is a
 --  file in the "cookbook" bucket at
@@ -21,7 +27,7 @@
 -- ============================================================
 
 -- ---------- Tables ----------
-create table if not exists public.meals (
+create table if not exists public.cookbook_meals (
   user_id  uuid   not null default auth.uid() references auth.users (id) on delete cascade,
   id       text   not null,
   data     jsonb  not null,
@@ -29,7 +35,7 @@ create table if not exists public.meals (
   primary key (user_id, id)
 );
 
-create table if not exists public.meta (
+create table if not exists public.cookbook_meta (
   user_id uuid  not null default auth.uid() references auth.users (id) on delete cascade,
   key     text  not null,
   value   jsonb not null,
@@ -37,31 +43,31 @@ create table if not exists public.meta (
 );
 
 -- Pulling "everything changed since my last sync" is the hot path.
-create index if not exists meals_user_modified_idx on public.meals (user_id, modified);
+create index if not exists cookbook_meals_user_modified_idx on public.cookbook_meals (user_id, modified);
 
 -- ---------- Row Level Security ----------
-alter table public.meals enable row level security;
-alter table public.meta  enable row level security;
+alter table public.cookbook_meals enable row level security;
+alter table public.cookbook_meta  enable row level security;
 
 -- meals: full access to your own rows only
-drop policy if exists "meals select own" on public.meals;
-drop policy if exists "meals insert own" on public.meals;
-drop policy if exists "meals update own" on public.meals;
-drop policy if exists "meals delete own" on public.meals;
-create policy "meals select own" on public.meals for select using (auth.uid() = user_id);
-create policy "meals insert own" on public.meals for insert with check (auth.uid() = user_id);
-create policy "meals update own" on public.meals for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
-create policy "meals delete own" on public.meals for delete using (auth.uid() = user_id);
+drop policy if exists "cookbook_meals select own" on public.cookbook_meals;
+drop policy if exists "cookbook_meals insert own" on public.cookbook_meals;
+drop policy if exists "cookbook_meals update own" on public.cookbook_meals;
+drop policy if exists "cookbook_meals delete own" on public.cookbook_meals;
+create policy "cookbook_meals select own" on public.cookbook_meals for select using (auth.uid() = user_id);
+create policy "cookbook_meals insert own" on public.cookbook_meals for insert with check (auth.uid() = user_id);
+create policy "cookbook_meals update own" on public.cookbook_meals for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "cookbook_meals delete own" on public.cookbook_meals for delete using (auth.uid() = user_id);
 
 -- meta: full access to your own rows only
-drop policy if exists "meta select own" on public.meta;
-drop policy if exists "meta insert own" on public.meta;
-drop policy if exists "meta update own" on public.meta;
-drop policy if exists "meta delete own" on public.meta;
-create policy "meta select own" on public.meta for select using (auth.uid() = user_id);
-create policy "meta insert own" on public.meta for insert with check (auth.uid() = user_id);
-create policy "meta update own" on public.meta for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
-create policy "meta delete own" on public.meta for delete using (auth.uid() = user_id);
+drop policy if exists "cookbook_meta select own" on public.cookbook_meta;
+drop policy if exists "cookbook_meta insert own" on public.cookbook_meta;
+drop policy if exists "cookbook_meta update own" on public.cookbook_meta;
+drop policy if exists "cookbook_meta delete own" on public.cookbook_meta;
+create policy "cookbook_meta select own" on public.cookbook_meta for select using (auth.uid() = user_id);
+create policy "cookbook_meta insert own" on public.cookbook_meta for insert with check (auth.uid() = user_id);
+create policy "cookbook_meta update own" on public.cookbook_meta for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "cookbook_meta delete own" on public.cookbook_meta for delete using (auth.uid() = user_id);
 
 -- ---------- Storage bucket for board photos ----------
 insert into storage.buckets (id, name, public)

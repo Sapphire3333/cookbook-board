@@ -171,10 +171,13 @@ syncs too.
 - **Deleting a meal asks first**, and takes a snapshot before it goes — the
   confirmation tells you how many photos are involved, and the message afterwards
   gives you the 4-digit code that brings it all back
-- **Numbered backups**: snapshots kept inside the browser, each with a **4-digit
-  code** — type the code to restore that version. One is taken automatically the
-  first time you save each day, and another right before any restore, so
-  restoring is itself undoable. The newest 20 are kept
+- **Numbered backups**: snapshots each with a **4-digit code** — type the code to
+  restore that version. One is taken automatically the first time you save each
+  day, and another right before any restore or delete, so both are undoable. The
+  newest 20 are kept.
+  **Signed in, the codes travel with your account**, so one made on your computer
+  works on your phone once both have synced (the ten most recent go up). Signed
+  out they stay on the device that made them, and the panel says so
 - **Download backup** / **Restore from backup file** as a single JSON
 - *Restore last save* to throw away unsaved changes
 - **If saving ever fails** — a full disk is the usual cause — it says so loudly
@@ -207,8 +210,8 @@ This gives you a private login and the same cookbook on every device.
    any strong database password (the app never needs it). Wait for setup to finish.
 2. In the sidebar open **SQL Editor → New query**. Copy **all** of `schema.sql`
    from this repo, paste, **Run**. You should see "Success". This creates the
-   `meals` and `meta` tables, the `cookbook` storage bucket, and the security rules
-   that lock every row and photo to your login.
+   `cookbook_meals` and `cookbook_meta` tables, the `cookbook` storage bucket, and
+   the security rules that lock every row and photo to your login.
 3. Open **Project Settings → API** and copy two values:
    - **Project URL** — like `https://abcd1234.supabase.co`
    - the **anon / public** key (on newer projects it's labelled *Publishable key* —
@@ -225,6 +228,18 @@ This gives you a private login and the same cookbook on every device.
 
 > **Note:** the URL and anon key in `config.js` are public *by design* — it's safe
 > to commit them. Your data is protected by row-level security, not by hiding keys.
+
+### Running more than one app in one Supabase project
+
+You can — one Supabase account holds as many projects as you like, and a single
+project can host several apps. The catch is table names. Everything this app
+creates is prefixed **`cookbook_`** precisely so it can share a project safely.
+
+If another of your apps creates a plain `meta` or `settings` table, the two will
+silently become *the same table* — `create table if not exists` succeeds by doing
+nothing — and they'll overwrite each other's settings and deleted-item lists with
+no error to point at. If you hit that, give each app either its own project or its
+own table prefix.
 
 ### Put it on your phone's home screen
 
