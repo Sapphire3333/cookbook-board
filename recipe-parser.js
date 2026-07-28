@@ -317,5 +317,66 @@
     return parts;
   }
 
-  window.RecipeParser = { parseRecipe, ingredientKey, findDurations, splitByDurations };
+  /* ---------- quantities, for scaling a recipe ---------- */
+
+  const FRAC_VALUE = { "¼": 0.25, "½": 0.5, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3, "⅛": 0.125 };
+
+  /* "500 g potatoes"        -> { qty: 500, unit: "g",      rest: "potatoes" }
+     "2 cloves garlic, crushed" -> { qty: 2, unit: "cloves", rest: "garlic, crushed" }
+     "Salt and pepper"       -> { qty: null, ... }  — nothing to scale, left alone */
+  function parseQuantity(line) {
+    const s = String(line || "").trim();
+    const m = s.match(new RegExp(
+      "^(\\d+\\s*[¼½¾⅓⅔⅛]|[¼½¾⅓⅔⅛]|\\d+\\s*/\\s*\\d+|\\d+(?:[.,]\\d+)?(?:\\s*(?:-|–|to)\\s*\\d+(?:[.,]\\d+)?)?)" +
+      "\\s*(" + UNITS + ")?\\b\\.?\\s*(?:of\\s+)?(.*)$", "i"));
+    if (!m) return { qty: null, unit: "", rest: s, raw: s };
+
+    let qty = 0;
+    const q = m[1].trim();
+    const fracOnly = q.match(/^([¼½¾⅓⅔⅛])$/);
+    const mixed = q.match(/^(\d+)\s*([¼½¾⅓⅔⅛])$/);
+    const vulgar = q.match(/^(\d+)\s*\/\s*(\d+)$/);
+    if (fracOnly) qty = FRAC_VALUE[fracOnly[1]];
+    else if (mixed) qty = parseInt(mixed[1], 10) + FRAC_VALUE[mixed[2]];
+    else if (vulgar) qty = parseInt(vulgar[1], 10) / parseInt(vulgar[2], 10);
+    else qty = parseFloat(q.split(/-|–|to/i)[0].replace(",", "."));   // a range scales from its lower end
+    if (!isFinite(qty) || qty <= 0) return { qty: null, unit: "", rest: s, raw: s };
+
+    return { qty, unit: (m[2] || "").trim(), rest: (m[3] || "").trim(), raw: s };
+  }
+
+  /* 0.5 -> "½", 1.5 -> "1½", 0.33 -> "⅓". Cooking is written in fractions and a
+     recipe asking for "0.75 tsp" reads like a spreadsheet. */
+  function formatQty(n) {
+    const whole = Math.floor(n + 1e-9);
+    const frac = n - whole;
+    const near = (a, b) => Math.abs(a - b) < 0.02;
+    let sym = "";
+    for (const [ch, v] of Object.entries(FRAC_VALUE)) if (near(frac, v)) { sym = ch; break; }
+    if (sym) return (whole ? whole : "") + sym;
+    if (near(frac, 0)) return String(whole);
+    return String(Math.round(n * 100) / 100);
+  }
+
+  /* Keeps units sensible as things grow: 1500 g reads better as 1.5 kg. */
+  function tidyUnit(qty, unit) {
+    const u = unit.toLowerCase();
+    if (u === "g" && qty >= 1000) return { qty: qty / 1000, unit: "kg" };
+    if (u === "kg" && qty < 1) return { qty: qty * 1000, unit: "g" };
+    if ((u === "ml") && qty >= 1000) return { qty: qty / 1000, unit: "l" };
+    if ((u === "l" || u === "litre" || u === "litres") && qty < 1) return { qty: qty * 1000, unit: "ml" };
+    return { qty, unit };
+  }
+
+  function scaleIngredient(line, factor) {
+    const p = parseQuantity(line);
+    if (p.qty === null) return line;                    // no number to scale
+    const t = tidyUnit(p.qty * factor, p.unit);
+    return [formatQty(t.qty), t.unit, p.rest].filter(Boolean).join(" ");
+  }
+
+  window.RecipeParser = {
+    parseRecipe, ingredientKey, findDurations, splitByDurations,
+    parseQuantity, formatQty, scaleIngredient,
+  };
 })();

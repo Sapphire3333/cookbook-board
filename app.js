@@ -80,7 +80,15 @@ const FRAME_SPOTS = [
 /* Things almost everyone has. Missing one of these shouldn't stop a recipe
    being suggested, so they score much lower than real ingredients. */
 const STAPLES = new Set(["salt", "black pepper", "pepper", "water", "olive oil", "vegetable oil",
-  "oil", "butter", "sugar", "flour", "garlic", "onion"]);
+  "oil", "butter", "sugar", "flour", "garlic", "onion", "seasoning"]);
+
+/* "Salt and pepper" is two staples on one line, and shouldn't end up on a
+   shopping list just because the pair isn't a single catalogue entry. */
+function isStaple(key) {
+  if (STAPLES.has(key)) return true;
+  const parts = String(key).split(/\s+(?:and|&|\+)\s+/).map((s) => s.trim()).filter(Boolean);
+  return parts.length > 1 && parts.every((p) => STAPLES.has(p));
+}
 
 const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4);
 const imgKey = (mealId, itemId) => mealId + "__" + itemId;
@@ -270,17 +278,28 @@ function matchKeys(name) {
   return [...out].filter(Boolean);
 }
 
-/* Does the pantry cover this ingredient? Substring both ways, because
-   "chicken breast" in the pantry should satisfy "chicken" in a recipe and
-   vice-versa. */
+/* Whole words only: "cornflour" must not count as having "corn". */
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function containsWords(haystack, needle) {
+  return new RegExp("(^|\\s)" + escapeRe(needle) + "($|\\s)").test(haystack);
+}
+
+/* Does the pantry cover this ingredient?
+   The match is deliberately one-directional. Your pantry item may be MORE
+   specific than the recipe asks for — having "chicken breast" satisfies
+   "chicken", having "olive oil" satisfies "oil" — but never less. Matching both
+   ways, as this used to, meant ticking "butter" made the app believe you had
+   "peanut butter", and "cream" covered "sour cream": it would tell you a recipe
+   was ready to cook and leave the missing thing off your shopping list.
+   Erring towards buying a spare is much cheaper than finding out at the stove. */
 function pantryHas(haveSet, ingredient) {
   const keys = matchKeys(Parser.ingredientKey(ingredient) || ingredient);
   for (const k of keys) {
-    if (!k) continue;
+    if (!k || k.length < 3) continue;
     if (haveSet.has(k)) return true;
     for (const h of haveSet) {
-      if (h.length < 3 || k.length < 3) continue;
-      if (k.includes(h) || h.includes(k)) return true;
+      if (h.length < 3) continue;
+      if (containsWords(h, k)) return true;
     }
   }
   return false;
@@ -293,7 +312,7 @@ function scoreRecipe(recipe, haveSet) {
   for (const i of ing) {
     const key = normalize(Parser.ingredientKey(i) || i);
     if (pantryHas(haveSet, i)) have.push(i);
-    else if (STAPLES.has(key)) have.push(i);          // assume you have salt
+    else if (isStaple(key)) have.push(i);            // assume you have salt
     else missing.push(i);
   }
   return { have, missing, pct: Math.round((have.length / ing.length) * 100) };
@@ -465,10 +484,49 @@ const mmss = (s) => {
   return (h ? h + ":" + String(m).padStart(2, "0") : String(m)) + ":" + String(ss).padStart(2, "0");
 };
 
+/* A timer that only beeps is no use once you've switched to another app, which
+   is exactly when a long roast finishes. Asked for the first time you start one. */
+function askNotify() {
+  try {
+    if (window.Notification && Notification.permission === "default") Notification.requestPermission();
+  } catch { /* not available */ }
+}
+function notify(label) {
+  try {
+    if (!window.Notification || Notification.permission !== "granted") return;
+    if (!document.hidden) return;   // you're looking at it; the sound is enough
+    new Notification("Timer finished", { body: label, tag: "cookbook-timer", icon: "icon.svg" });
+  } catch { /* not available */ }
+}
+
 function useTimers() {
   const [timers, setTimers] = useState([]);
   const [, force] = useState(0);
   const rang = useRef(new Set());
+  const loaded = useRef(false);
+
+  /* Timers are stored as the moment they end, so closing the tab, reloading, or
+     the phone killing a backgrounded app doesn't lose them — reopening picks the
+     countdown back up where the clock actually is. */
+  useEffect(() => {
+    (async () => {
+      try {
+        const saved = await idb.get("meta", "timers");
+        if (Array.isArray(saved) && saved.length) {
+          const cutoff = Date.now() - 6 * 3600 * 1000;   // forget yesterday's
+          const live = saved.filter((t) => t.endsAt > cutoff);
+          live.forEach((t) => { if (Date.now() >= t.endsAt) rang.current.add(t.id); });
+          setTimers(live.map((t) => ({ ...t, done: Date.now() >= t.endsAt })));
+        }
+      } catch { /* nothing saved */ }
+      loaded.current = true;
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!loaded.current) return;
+    idb.put("meta", timers, "timers").catch(() => { });
+  }, [timers]);
 
   useEffect(() => {
     if (!timers.some((t) => !t.done)) return;
@@ -486,6 +544,7 @@ function useTimers() {
         if (!t.done && now >= t.endsAt && !rang.current.has(t.id)) {
           rang.current.add(t.id);
           alarm();
+          notify(t.label);
           changed = true;
         }
       }
@@ -497,6 +556,7 @@ function useTimers() {
 
   const start = (seconds, label) => {
     primeAudio();
+    askNotify();
     const t = { id: uid(), label: label || mmss(seconds), total: seconds, endsAt: Date.now() + seconds * 1000, done: false };
     setTimers((ts) => [...ts, t]);
     return t.id;
@@ -571,7 +631,8 @@ function Frame({ theme }) {
 
 function Chip({ active, onClick, children, tone }) {
   return html`
-    <button className=${"chip" + (active ? " chip-on" : "") + (tone ? " chip-" + tone : "")} onClick=${onClick}>
+    <button className=${"chip" + (active ? " chip-on" : "") + (tone ? " chip-" + tone : "")}
+      aria-pressed=${!!active} onClick=${onClick}>
       ${children}
     </button>`;
 }
@@ -584,12 +645,48 @@ function Star({ on, onClick, size = 18 }) {
     </button>`;
 }
 
+/* Ten stars, each half-tappable, so a rating is one touch instead of typing
+   "8.7" on a phone keypad. The exact number stays available beside it. */
+function StarRating({ value, onChange }) {
+  const [hover, setHover] = useState(null);
+  const shown = hover !== null ? hover : value;
+  return html`
+    <span className="stars" onPointerLeave=${() => setHover(null)}>
+      ${Array.from({ length: 10 }, (_, i) => {
+        const full = i + 1, half = i + 0.5;
+        const state = shown >= full ? "full" : shown >= half ? "half" : "empty";
+        return html`
+          <span key=${i} className=${"star star-" + state}>
+            <button aria-label=${half + " out of 10"} onClick=${() => onChange(half)}
+              onPointerEnter=${() => setHover(half)}></button>
+            <button aria-label=${full + " out of 10"} onClick=${() => onChange(full)}
+              onPointerEnter=${() => setHover(full)}></button>
+          </span>`;
+      })}
+    </span>`;
+}
+
+const lastCooked = (meal) => {
+  const log = meal.cookLog || [];
+  return log.length ? log[log.length - 1] : null;
+};
+function cookedSummary(meal) {
+  const log = meal.cookLog || [];
+  if (!log.length) return "";
+  const last = new Date(log[log.length - 1]);
+  const days = Math.floor((Date.now() - last.getTime()) / 86400000);
+  const when = days === 0 ? "today" : days === 1 ? "yesterday"
+    : days < 30 ? days + " days ago"
+    : last.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  return "Cooked " + log.length + (log.length === 1 ? " time" : " times") + " · last " + when;
+}
+
 function coverOf(meal) {
   const imgs = meal.items.filter((i) => i.kind === "image");
   return imgs.find((i) => i.id === meal.coverId) || imgs[0] || null;
 }
 
-function MealCard({ meal, onOpen, onFav }) {
+function MealCard({ meal, onOpen, onFav, onCook }) {
   const cov = coverOf(meal);
   return html`
     <div className="card" onClick=${() => onOpen(meal.id)}>
@@ -598,6 +695,9 @@ function MealCard({ meal, onOpen, onFav }) {
           ? html`<img src=${cov.src} alt=${meal.name} draggable=${false} />`
           : html`<div className="card-noimg">${cov ? "photo unavailable" : "no photo yet"}</div>`}
         <span className="card-rating">${meal.rating.toFixed(1)}</span>
+        ${onCook && html`
+          <button className="card-cook" title=${"Cook " + meal.name} aria-label=${"Cook " + meal.name}
+            onClick=${(e) => { e.stopPropagation(); onCook(meal.id); }}>▶</button>`}
       </div>
       <div className="card-body">
         <div className="card-title-row">
@@ -609,7 +709,40 @@ function MealCard({ meal, onOpen, onFav }) {
           ${(meal.variants || []).length > 0 &&
             html`<span className="var-tag"> +${meal.variants.length} prep${meal.variants.length > 1 ? "s" : ""}</span>`}
         </div>
+        ${(meal.cookLog || []).length > 0 && html`
+          <div className="card-cooked">🍽 ${cookedSummary(meal)}</div>`}
       </div>
+    </div>`;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Photo lightbox                                                     */
+/* ------------------------------------------------------------------ */
+function Lightbox({ photos, index, onIndex, onClose }) {
+  const photo = photos[index];
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose();
+      if (e.key === "ArrowRight") onIndex((index + 1) % photos.length);
+      if (e.key === "ArrowLeft") onIndex((index - 1 + photos.length) % photos.length);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [index, photos.length, onIndex, onClose]);
+  if (!photo) return null;
+  return html`
+    <div className="lightbox" role="dialog" aria-modal="true" aria-label="Photo"
+      onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <button className="lb-close" aria-label="Close photo" onClick=${onClose}>✕</button>
+      ${photos.length > 1 && html`
+        <${Frag}>
+          <button className="lb-nav lb-prev" aria-label="Previous photo"
+            onClick=${() => onIndex((index - 1 + photos.length) % photos.length)}>‹</button>
+          <button className="lb-nav lb-next" aria-label="Next photo"
+            onClick=${() => onIndex((index + 1) % photos.length)}>›</button>
+          <span className="lb-count">${index + 1} / ${photos.length}</span>
+        <//>`}
+      <img src=${photo.src} alt="" />
     </div>`;
 }
 
@@ -652,7 +785,7 @@ function ColorWheel({ color, onChange }) {
 /*  the instructions. The dotted area is just a hint about where       */
 /*  there's free room.                                                 */
 /* ------------------------------------------------------------------ */
-function PageCanvas({ meal, mode, draw, update, pageRef }) {
+function PageCanvas({ meal, mode, draw, update, pageRef, onViewPhoto }) {
   const dragRef = useRef(null);
   const drawRef = useRef(null);
   const layerRef = useRef(null);
@@ -917,6 +1050,9 @@ function PageCanvas({ meal, mode, draw, update, pageRef }) {
             ${it.src
               ? html`<img src=${it.src} alt="" draggable=${false} />`
               : html`<div className="bimg-missing">photo unavailable</div>`}
+            ${mode === "view" && it.src && html`
+              <button className="bimg-zoom" aria-label="View this photo full size"
+                onClick=${(e) => { e.stopPropagation(); onViewPhoto(it.id); }}>⤢</button>`}
             ${mode === "arrange" && html`
               <${Frag}>
                 <div className="img-ctrl" onPointerDown=${(e) => e.stopPropagation()}>
@@ -947,19 +1083,52 @@ function PageCanvas({ meal, mode, draw, update, pageRef }) {
 /* ------------------------------------------------------------------ */
 /*  Ingredients editor                                                 */
 /* ------------------------------------------------------------------ */
-function Ingredients({ list, have, onChange }) {
+function Ingredients({ list, have, onChange, servings, onScale }) {
   const [draft, setDraft] = useState("");
+  const [target, setTarget] = useState("");
   const add = () => {
     const parts = draft.split(/,|\n/).map((s) => s.trim()).filter(Boolean);
     if (parts.length) onChange([...list, ...parts]);
     setDraft("");
   };
+
+  /* Only worth offering if there's something to scale: lines like
+     "salt and pepper" have no number and are left exactly as they are. */
+  const scalable = list.filter((i) => Parser.parseQuantity(i).qty !== null).length;
+  const doScale = (factor, newServings) => {
+    if (!factor || factor === 1) return;
+    onScale(list.map((i) => Parser.scaleIngredient(i, factor)), newServings);
+  };
+
   return html`
     <div className="ing-block">
       <div className="var-head">
         <span className="fg-label" style=${{ width: "auto" }}>Ingredients</span>
         <span className="hint">used by “What can I cook?” — green means it's in your pantry</span>
       </div>
+
+      ${scalable > 0 && html`
+        <div className="scale-row">
+          <span className="hint">Scale the amounts:</span>
+          <button className="btn" onClick=${() => doScale(2, servings ? servings * 2 : null)}>×2</button>
+          <button className="btn" onClick=${() => doScale(3, servings ? servings * 3 : null)}>×3</button>
+          <button className="btn" onClick=${() => doScale(0.5, servings ? Math.max(1, Math.round(servings / 2)) : null)}>÷2</button>
+          ${servings > 0 && html`
+            <span className="unit-wrap">
+              <span className="hint">or make it serve</span>
+              <input type="number" inputMode="numeric" min="1" max="99" placeholder=${servings} value=${target}
+                onChange=${(e) => setTarget(e.target.value)}
+                onKeyDown=${(e) => {
+                  if (e.key !== "Enter") return;
+                  const n = +target;
+                  if (n > 0 && n !== servings) { doScale(n / servings, n); setTarget(""); }
+                }} />
+              <button className="btn" disabled=${!(+target > 0) || +target === servings}
+                onClick=${() => { const n = +target; doScale(n / servings, n); setTarget(""); }}>apply</button>
+            </span>`}
+          ${scalable < list.length && html`
+            <span className="hint">${list.length - scalable} without an amount stay as they are</span>`}
+        </div>`}
       <div className="ing-chips">
         ${list.map((ing, i) => html`
           <span key=${i} className=${"ing-chip" + (pantryHas(have, ing) ? " ing-have" : "")}>
@@ -1053,13 +1222,23 @@ function Steps({ instructions, onChange }) {
 /*  to tick it off, nothing editable so you can't wreck the recipe by   */
 /*  leaning on the screen, and the display kept awake.                  */
 /* ------------------------------------------------------------------ */
-function CookMode({ meal, onClose, timers }) {
-  const [done, setDone] = useState({});
-  const [got, setGot] = useState({});
+function CookMode({ meal, onClose, timers, progress, setProgress, onFinished }) {
   const [wake, setWake] = useState("off");
   const lockRef = useRef(null);
   const steps = stepsOf(meal.instructions);
   const ingredients = meal.ingredients || [];
+
+  /* Ticks are kept outside this component so walking away mid-recipe — which is
+     most of cooking — doesn't wipe them. */
+  const mine = progress[meal.id] || { done: {}, got: {} };
+  const done = mine.done || {};
+  const got = mine.got || {};
+  const patch = (part) => setProgress((p) => ({
+    ...p, [meal.id]: { ...(p[meal.id] || { done: {}, got: {} }), ...part, at: Date.now() },
+  }));
+  const toggleStep = (i) => patch({ done: { ...done, [i]: !done[i] } });
+  const toggleGot = (i) => patch({ got: { ...got, [i]: !got[i] } });
+  const resetTicks = () => setProgress((p) => ({ ...p, [meal.id]: { done: {}, got: {}, at: Date.now() } }));
 
   /* Keep the screen on. Not every browser has this — when it's missing we say
      so rather than pretending, because a screen that sleeps mid-recipe is
@@ -1108,7 +1287,7 @@ function CookMode({ meal, onClose, timers }) {
   return html`
     <div className="cook">
       <header className="cook-top">
-        <button className="btn cook-exit" onClick=${onClose}>✕ Done cooking</button>
+        <button className="btn cook-exit" onClick=${onClose}>✕ Close</button>
         <div className="cook-title">
           <b>${meal.name}</b>
           <span>${meal.device} · ${meal.prepTime} min${doneCount ? " · " + doneCount + " of " + steps.length + " done" : ""}</span>
@@ -1125,7 +1304,7 @@ function CookMode({ meal, onClose, timers }) {
             <div className="cook-ing-list">
               ${ingredients.map((ing, i) => html`
                 <button key=${i} className=${"cook-ing-item" + (got[i] ? " got" : "")}
-                  onClick=${() => setGot((g) => ({ ...g, [i]: !g[i] }))}>
+                  aria-pressed=${!!got[i]} onClick=${() => toggleGot(i)}>
                   <span className="chk-box">${got[i] ? "✓" : ""}</span>${ing}
                 </button>`)}
             </div>
@@ -1137,16 +1316,28 @@ function CookMode({ meal, onClose, timers }) {
             <p className="cook-empty">This meal has no steps yet. Add some on the meal page and they'll show up here.</p>`}
           <ol className="cook-steps">
             ${steps.map((s, i) => html`
-              <li key=${i} className=${"cook-step" + (done[i] ? " cook-done" : "")}
-                onClick=${() => setDone((d) => ({ ...d, [i]: !d[i] }))}>
-                <span className="cook-n">${done[i] ? "✓" : i + 1}</span>
-                <span className="cook-text">${renderStep(s)}</span>
+              <li key=${i}>
+                <div className=${"cook-step" + (done[i] ? " cook-done" : "")}
+                  role="checkbox" tabIndex=${0} aria-checked=${!!done[i]}
+                  aria-label=${"Step " + (i + 1)}
+                  onClick=${() => toggleStep(i)}
+                  onKeyDown=${(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleStep(i); } }}>
+                  <span className="cook-n">${done[i] ? "✓" : i + 1}</span>
+                  <span className="cook-text">${renderStep(s)}</span>
+                </div>
               </li>`)}
           </ol>
         </section>
 
         ${meal.notes && html`
           <section className="cook-notes"><h3>Notes</h3><p>${meal.notes}</p></section>`}
+
+        <div className="cook-finish">
+          <button className="btn btn-cook" onClick=${() => onFinished(meal.id)}>✓ I cooked this</button>
+          <span className="hint">records today's date and clears the ticks</span>
+          ${(doneCount > 0 || Object.values(got).some(Boolean)) && html`
+            <button className="btn btn-ghost" onClick=${resetTicks}>clear ticks only</button>`}
+        </div>
 
         <p className="cook-foot">
           Tap a step to tick it off. Tap a time to start a timer.
@@ -1161,18 +1352,20 @@ function CookMode({ meal, onClose, timers }) {
 /* ------------------------------------------------------------------ */
 /*  Meal detail                                                        */
 /* ------------------------------------------------------------------ */
-function MealDetail({ meal, update, onDelete, have, onPasteRecipe, onCook }) {
+function MealDetail({ meal, update, onDelete, have, onPasteRecipe, onCook, onAddToShopping, inShopping, offerUndo }) {
   const [mode, setMode] = useState("view");
   const [tool, setTool] = useState("pen");
   const [color, setColor] = useState("#D8341F");
   const [size, setSize] = useState(4);
   const [wheelOpen, setWheelOpen] = useState(false);
   const [busy, setBusy] = useState(0);
+  const [lightbox, setLightbox] = useState(null);
   const fileRef = useRef(null);
   const pageRef = useRef(null);
   const boardRef = useRef(null);
   const cascade = useRef(0);
   const mealId = meal.id;
+  const photos = meal.items.filter((i) => i.kind === "image" && i.src);
 
   /* Where a newly added thing should land: inside the dotted area, which is
      measured against the meal page because that's the item coordinate space. */
@@ -1283,16 +1476,31 @@ function MealDetail({ meal, update, onDelete, have, onPasteRecipe, onCook }) {
                 onChange=${(e) => update((m) => ({ ...m, prepTime: Math.max(1, +e.target.value || 1) }))} /> min
             </span>
           </label>
-          <label>Rating
+          <label>Servings
             <span className="unit-wrap">
+              <input type="number" inputMode="numeric" min="1" max="99" placeholder="—" value=${meal.servings ?? ""}
+                onChange=${(e) => update((m) => ({ ...m, servings: e.target.value === "" ? null : Math.max(1, +e.target.value || 1) }))} />
+            </span>
+          </label>
+          <label>Rating
+            <span className="unit-wrap rate-wrap">
+              <${StarRating} value=${meal.rating}
+                onChange=${(v) => update((m) => ({ ...m, rating: v }))} />
               <input type="number" inputMode="decimal" min="1" max="10" step="0.1" value=${meal.rating}
-                onChange=${(e) => update((m) => ({ ...m, rating: Math.min(10, Math.max(1, +e.target.value || 1)) }))} /> / 10
+                onChange=${(e) => update((m) => ({ ...m, rating: Math.min(10, Math.max(1, +e.target.value || 1)) }))} />
             </span>
           </label>
         </div>
+        ${(meal.cookLog || []).length > 0 && html`
+          <div className="cooked-line">🍽 ${cookedSummary(meal)}</div>`}
 
-        <${Ingredients} list=${meal.ingredients || []} have=${have}
-          onChange=${(ingredients) => update((m) => ({ ...m, ingredients }))} />
+        <${Ingredients} list=${meal.ingredients || []} have=${have} servings=${meal.servings}
+          onChange=${(ingredients) => update((m) => ({ ...m, ingredients }))}
+          onScale=${(ingredients, servings) => {
+            const before = { ingredients: meal.ingredients || [], servings: meal.servings };
+            update((m) => ({ ...m, ingredients, servings: servings ?? m.servings }));
+            offerUndo("Amounts rescaled.", () => update((m) => ({ ...m, ...before })));
+          }} />
 
         <div className="variants">
           <div className="var-head">
@@ -1358,6 +1566,11 @@ function MealDetail({ meal, update, onDelete, have, onPasteRecipe, onCook }) {
         <button className="btn" onClick=${addNote}>+ Notepad</button>
         <button className="btn" onClick=${addTable}>+ Table</button>
         <button className="btn" onClick=${onPasteRecipe}>⎘ Paste a recipe</button>
+        <button className="btn" onClick=${() => onAddToShopping(meal.id)}
+          disabled=${inShopping || !(meal.ingredients || []).length}
+          title=${!(meal.ingredients || []).length ? "Add some ingredients first" : ""}>
+          ${inShopping ? "✓ on the shopping list" : "🛒 Add to shopping list"}
+        </button>
         ${busy > 0
           ? html`<span className="hint">adding ${busy} photo${busy > 1 ? "s" : ""}…</span>`
           : html`<span className="hint">…or paste / drop an image anywhere on this page</span>`}
@@ -1374,7 +1587,13 @@ function MealDetail({ meal, update, onDelete, have, onPasteRecipe, onCook }) {
               <input type="range" min="2" max="24" value=${size} onChange=${(e) => setSize(+e.target.value)} />
             </label>
             <button className="tool" onClick=${() => update((m) => ({ ...m, strokes: m.strokes.slice(0, -1) }))}>↩ undo</button>
-            <button className="tool" onClick=${() => update((m) => ({ ...m, strokes: [] }))}>clear drawings</button>
+            <button className="tool" disabled=${!meal.strokes.length}
+              onClick=${() => {
+                const kept = meal.strokes;
+                update((m) => ({ ...m, strokes: [] }));
+                offerUndo("Cleared " + kept.length + " drawing" + (kept.length === 1 ? "" : "s") + ".",
+                  () => update((m) => ({ ...m, strokes: kept })));
+              }}>clear drawings</button>
             ${wheelOpen && html`
               <div className="wheel-pop">
                 <${ColorWheel} color=${color} onChange=${setColor} />
@@ -1404,7 +1623,11 @@ function MealDetail({ meal, update, onDelete, have, onPasteRecipe, onCook }) {
         <span className="hint">a backup is taken first, so it can be brought back</span>
       </div>
 
-      <${PageCanvas} meal=${meal} mode=${mode} draw=${{ tool, color, size }} update=${update} pageRef=${pageRef} />
+      <${PageCanvas} meal=${meal} mode=${mode} draw=${{ tool, color, size }} update=${update} pageRef=${pageRef}
+        onViewPhoto=${(id) => setLightbox(Math.max(0, photos.findIndex((p) => p.id === id)))} />
+
+      ${lightbox !== null && html`
+        <${Lightbox} photos=${photos} index=${lightbox} onIndex=${setLightbox} onClose=${() => setLightbox(null)} />`}
     </div>`;
 }
 
@@ -1670,6 +1893,103 @@ function aisleOf(name) {
   return "Other";
 }
 
+/* Local yyyy-mm-dd. Deliberately not toISOString, which converts to UTC and can
+   put an evening meal on the wrong day. */
+const dayKey = (d) => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") +
+  "-" + String(d.getDate()).padStart(2, "0");
+function weekStart(offsetWeeks) {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  const dow = (d.getDay() + 6) % 7;                 // Monday = 0
+  d.setDate(d.getDate() - dow + offsetWeeks * 7);
+  return d;
+}
+
+function WeekPlan({ meals, plan, setPlan, onOpen, onCook, onSendToShopping }) {
+  const [week, setWeek] = useState(0);
+  const [adding, setAdding] = useState(null);       // the day key being added to
+  const start = weekStart(week);
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(start); d.setDate(d.getDate() + i); return d;
+  });
+  const today = dayKey(new Date());
+  const byId = new Map(meals.map((m) => [m.id, m]));
+
+  const label = start.toLocaleDateString(undefined, { day: "numeric", month: "short" }) + " – " +
+    days[6].toLocaleDateString(undefined, { day: "numeric", month: "short" });
+
+  const add = (key, id) => {
+    setPlan((p) => ({ ...p, [key]: [...(p[key] || []), id] }));
+    setAdding(null);
+  };
+  const remove = (key, i) => setPlan((p) => ({ ...p, [key]: (p[key] || []).filter((_, j) => j !== i) }));
+
+  const weekMealIds = [...new Set(days.flatMap((d) => plan[dayKey(d)] || []))].filter((id) => byId.has(id));
+
+  return html`
+    <${Frag}>
+      <div className="plan-head">
+        <h3 className="sec-h" style=${{ margin: 0 }}>Week plan</h3>
+        <div className="plan-nav">
+          <button className="btn" onClick=${() => setWeek((w) => w - 1)} aria-label="Previous week">←</button>
+          <span>${week === 0 ? "This week" : week === 1 ? "Next week" : week === -1 ? "Last week" : label}</span>
+          <button className="btn" onClick=${() => setWeek((w) => w + 1)} aria-label="Next week">→</button>
+          ${week !== 0 && html`<button className="btn btn-ghost" onClick=${() => setWeek(0)}>today</button>`}
+        </div>
+      </div>
+      <p className="sub">${label} · plan what you're cooking, then send the whole week to the shopping list.</p>
+
+      ${meals.length === 0
+        ? html`<p className="sub">Add some meals first and they'll be pickable here.</p>`
+        : html`
+          <${Frag}>
+            <div className="plan-grid">
+              ${days.map((d) => {
+                const key = dayKey(d);
+                const ids = plan[key] || [];
+                return html`
+                  <div key=${key} className=${"plan-day" + (key === today ? " plan-today" : "")}>
+                    <div className="plan-date">
+                      <b>${d.toLocaleDateString(undefined, { weekday: "short" })}</b>
+                      <span>${d.getDate()}</span>
+                    </div>
+                    ${ids.map((id, i) => {
+                      const m = byId.get(id);
+                      if (!m) return null;
+                      return html`
+                        <div key=${i} className="plan-meal">
+                          <button className="plan-name" onClick=${() => onOpen(id)} title=${m.name}>${m.name}</button>
+                          <button className="plan-cook" title=${"Cook " + m.name} onClick=${() => onCook(id)}>▶</button>
+                          <button className="plan-x" title="Remove" onClick=${() => remove(key, i)}>✕</button>
+                        </div>`;
+                    })}
+                    ${adding === key
+                      ? html`
+                        <select className="plan-pick" autoFocus size="1"
+                          onChange=${(e) => e.target.value && add(key, e.target.value)}
+                          onBlur=${() => setAdding(null)}>
+                          <option value="">choose a meal…</option>
+                          ${meals.map((m) => html`<option key=${m.id} value=${m.id}>${m.name}</option>`)}
+                        </select>`
+                      : html`<button className="plan-add" onClick=${() => setAdding(key)}>+ add</button>`}
+                  </div>`;
+              })}
+            </div>
+
+            <div className="plan-foot">
+              <button className="btn btn-primary" disabled=${!weekMealIds.length}
+                onClick=${() => onSendToShopping(weekMealIds)}>
+                Send ${weekMealIds.length || ""} meal${weekMealIds.length === 1 ? "" : "s"} to the shopping list
+              </button>
+              ${weekMealIds.length > 0 && html`
+                <button className="btn" onClick=${() => {
+                  setPlan((p) => { const next = { ...p }; days.forEach((d) => delete next[dayKey(d)]); return next; });
+                }}>Clear this week</button>`}
+            </div>
+          <//>`}
+    <//>`;
+}
+
 function ShoppingList({ meals, pantry, shopping, setShopping }) {
   const [extra, setExtra] = useState("");
   const chosen = shopping.mealIds || [];
@@ -1699,9 +2019,10 @@ function ShoppingList({ meals, pantry, shopping, setShopping }) {
       for (const raw of meal.ingredients || []) {
         const key = normalize(Parser.ingredientKey(raw) || raw);
         if (!key) continue;
-        if (pantryHas(have, raw) || STAPLES.has(key)) continue;
-        const hit = byKey.get(key) || { key, name: raw, forMeals: [], aisle: aisleOf(raw) };
+        if (pantryHas(have, raw) || isStaple(key)) continue;
+        const hit = byKey.get(key) || { key, name: raw, amounts: [], forMeals: [], aisle: aisleOf(raw) };
         if (!hit.forMeals.includes(meal.name)) hit.forMeals.push(meal.name);
+        hit.amounts.push(raw);
         byKey.set(key, hit);
       }
     }
@@ -1709,8 +2030,17 @@ function ShoppingList({ meals, pantry, shopping, setShopping }) {
       const key = normalize(x);
       if (!byKey.has(key)) byKey.set(key, { key, name: x, forMeals: [], aisle: aisleOf(x), manual: true });
     }
+    /* Two meals wanting "250 g potatoes" and "500 g potatoes" can't be added up
+       from free text, and showing just one of them would be a lie about how much
+       to buy. One source keeps its amount; several fall back to the bare name
+       with the amounts listed after it. */
     const groups = new Map();
     for (const item of byKey.values()) {
+      const distinct = [...new Set(item.amounts || [])];
+      if (distinct.length > 1) {
+        item.name = item.key;
+        item.note = distinct.join(" + ");
+      }
       if (!groups.has(item.aisle)) groups.set(item.aisle, []);
       groups.get(item.aisle).push(item);
     }
@@ -1780,7 +2110,10 @@ function ShoppingList({ meals, pantry, shopping, setShopping }) {
                   <button key=${i.key} className=${"shop-item" + (ticked[i.key] ? " shop-got" : "")}
                     onClick=${() => setShopping((s) => ({ ...s, ticked: { ...s.ticked, [i.key]: !(s.ticked || {})[i.key] } }))}>
                     <span className="chk-box">${ticked[i.key] ? "✓" : ""}</span>
-                    <span className="shop-name">${i.name}</span>
+                    <span className="shop-name">
+                      ${i.name}
+                      ${i.note && html`<span className="shop-amt"> (${i.note})</span>`}
+                    </span>
                     ${i.forMeals.length > 0
                       ? html`<span className="shop-for">${i.forMeals.join(", ")}</span>`
                       : html`<span className="shop-for">added by hand</span>`}
@@ -1795,7 +2128,8 @@ function ShoppingList({ meals, pantry, shopping, setShopping }) {
     <//>`;
 }
 
-function PantryTab({ meals, pantry, setPantry, onOpen, onAddStarter, shopping, setShopping }) {
+function PantryTab({ meals, pantry, setPantry, onOpen, onAddStarter, shopping, setShopping,
+                     plan, setPlan, onCook }) {
   const [tab, setTab] = useState("suggest");
   const [draft, setDraft] = useState("");
   const [onlyComplete, setOnlyComplete] = useState(false);
@@ -1850,10 +2184,14 @@ function PantryTab({ meals, pantry, setPantry, onOpen, onAddStarter, shopping, s
       <div className="pantry-tabs">
         <button className=${tab === "suggest" ? "seg-on" : ""} onClick=${() => setTab("suggest")}>Suggest a meal</button>
         <button className=${tab === "pantry" ? "seg-on" : ""} onClick=${() => setTab("pantry")}>My pantry (${haveCount})</button>
+        <button className=${tab === "plan" ? "seg-on" : ""} onClick=${() => setTab("plan")}>Week plan</button>
         <button className=${tab === "shop" ? "seg-on" : ""} onClick=${() => setTab("shop")}>Shopping list</button>
       </div>
 
-      ${tab === "shop" ? html`
+      ${tab === "plan" ? html`
+        <${WeekPlan} meals=${meals} plan=${plan} setPlan=${setPlan} onOpen=${onOpen} onCook=${onCook}
+          onSendToShopping=${(ids) => { setShopping((s) => ({ ...s, mealIds: ids })); setTab("shop"); }} />`
+      : tab === "shop" ? html`
         <${ShoppingList} meals=${meals} pantry=${pantry} shopping=${shopping} setShopping=${setShopping} />`
       : tab === "pantry" ? html`
         <${Frag}>
@@ -1933,6 +2271,7 @@ function PantryTab({ meals, pantry, setPantry, onOpen, onAddStarter, shopping, s
 /* ------------------------------------------------------------------ */
 function BackupsPanel({ backups, onCreate, onRestore, onDelete, busy }) {
   const [code, setCode] = useState("");
+  const [label, setLabel] = useState("");
   const [confirm, setConfirm] = useState(null);
 
   const when = (t) => {
@@ -1955,7 +2294,13 @@ function BackupsPanel({ backups, onCreate, onRestore, onDelete, busy }) {
         <b> downloaded backup file</b> is still the one that survives anything.
       </p>
       <div className="store-btns" style=${{ marginLeft: 0, marginBottom: 10 }}>
-        <button className="btn btn-primary" disabled=${busy} onClick=${onCreate}>Create a backup now</button>
+        <span className="code-entry">
+          <input className="bk-label" value=${label} maxLength="40" placeholder="what's this backup for? (optional)"
+            onChange=${(e) => setLabel(e.target.value)}
+            onKeyDown=${(e) => { if (e.key === "Enter") { onCreate(label.trim()); setLabel(""); } }} />
+          <button className="btn btn-primary" disabled=${busy}
+            onClick=${() => { onCreate(label.trim()); setLabel(""); }}>Create a backup now</button>
+        </span>
         <span className="code-entry">
           <input value=${code} inputMode="numeric" maxLength="4" placeholder="code"
             onChange=${(e) => setCode(e.target.value.replace(/\D/g, ""))}
@@ -2112,8 +2457,9 @@ function CloudPanel({ user, onSignIn, onSignUp, onSignOut, onSyncNow, syncing, l
 /* ------------------------------------------------------------------ */
 function Check({ on, onClick, children, tone }) {
   return html`
-    <button className=${"chk" + (on ? " chk-on" : "") + (tone ? " chk-" + tone : "")} onClick=${onClick}>
-      <span className="chk-box">${on ? "✓" : ""}</span>${children}
+    <button className=${"chk" + (on ? " chk-on" : "") + (tone ? " chk-" + tone : "")}
+      role="checkbox" aria-checked=${!!on} onClick=${onClick}>
+      <span className="chk-box" aria-hidden="true">${on ? "✓" : ""}</span>${children}
     </button>`;
 }
 
@@ -2284,7 +2630,7 @@ function Overview(props) {
 /* ------------------------------------------------------------------ */
 /*  Meals list tab                                                     */
 /* ------------------------------------------------------------------ */
-function MealsTab({ meals, onOpen, onFav, onNew, onPasteRecipe }) {
+function MealsTab({ meals, onOpen, onFav, onNew, onPasteRecipe, onCook }) {
   const [sort, setSort] = useState("newest");
   const [typeF, setTypeF] = useState([]);
   const [devF, setDevF] = useState([]);
@@ -2302,6 +2648,9 @@ function MealsTab({ meals, onOpen, onFav, onNew, onPasteRecipe }) {
     rating: (a, b) => b.rating - a.rating,
     time: (a, b) => a.prepTime - b.prepTime,
     name: (a, b) => a.name.localeCompare(b.name),
+    // Never-cooked first, then longest ago — the "what have I been neglecting" list.
+    stale: (a, b) => (lastCooked(a) || 0) - (lastCooked(b) || 0),
+    mostcooked: (a, b) => ((b.cookLog || []).length) - ((a.cookLog || []).length),
   };
   let groups;
   if (sort === "type") groups = MEAL_TYPES.map((t) => [t, list.filter((m) => m.mealType === t)]).filter(([, l]) => l.length);
@@ -2320,6 +2669,8 @@ function MealsTab({ meals, onOpen, onFav, onNew, onPasteRecipe }) {
             <option value="rating">Rating (high → low)</option>
             <option value="time">Prep time (short → long)</option>
             <option value="name">Name A–Z</option>
+            <option value="stale">Not cooked in longest</option>
+            <option value="mostcooked">Cooked most often</option>
             <option value="type">Group by meal type</option>
             <option value="device">Group by device</option>
             <option value="favorites">Favorites first</option>
@@ -2336,10 +2687,31 @@ function MealsTab({ meals, onOpen, onFav, onNew, onPasteRecipe }) {
           ${label && html`<h3 className="sec-h">${label} <span className="count">(${ms.length})</span></h3>`}
           <div className="grid">
             ${(label ? [...ms].sort(sorters.rating) : ms).map((m) => html`
-              <${MealCard} key=${m.id} meal=${m} onOpen=${onOpen} onFav=${onFav} />`)}
+              <${MealCard} key=${m.id} meal=${m} onOpen=${onOpen} onFav=${onFav} onCook=${onCook} />`)}
           </div>
         </div>`)}
-      ${list.length === 0 && html`<p className="sub">No meals here yet — create one, or loosen the filters above.</p>`}
+
+      ${list.length === 0 && (meals.length > 0
+        ? html`<p className="sub">Nothing matches those filters — untick something to widen it.</p>`
+        : html`
+          <div className="welcome">
+            <h3>Your cookbook is empty</h3>
+            <p>Three ways to start — any of them works, and you can mix them freely.</p>
+            <div className="welcome-opts">
+              <button className="welcome-opt" onClick=${onNew}>
+                <b>Write one down</b>
+                <span>A blank meal page. Add photos, steps and a rating as you go.</span>
+              </button>
+              <button className="welcome-opt" onClick=${onPasteRecipe}>
+                <b>Paste one from the internet</b>
+                <span>Copy a recipe's text and it's sorted into ingredients and steps for you.</span>
+              </button>
+              <button className="welcome-opt" onClick=${() => onOpen("pantry")}>
+                <b>Start from a built-in recipe</b>
+                <span>Fourteen everyday recipes under “What can I cook?” — add any with one click.</span>
+              </button>
+            </div>
+          </div>`)}
     </div>`;
 }
 
@@ -2366,6 +2738,25 @@ function CookingOrganizer() {
   const [shopping, setShoppingState] = useState({ mealIds: [], ticked: {}, extra: [] });
   const [cookId, setCookId] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [cookProgress, setCookProgress] = useState({});
+  const [dark, setDark] = useState("auto");   // auto | light | dark
+  const [saveError, setSaveError] = useState("");
+  const [undo, setUndo] = useState(null);     // { message, restore }
+  const [plan, setPlanState] = useState({});  // { "2026-07-28": [mealId, …] }
+  const undoTimer = useRef(null);
+
+  /* Anything that throws work away offers it back for a few seconds. Cheaper
+     than a confirmation dialog on every destructive button, and kinder. */
+  const offerUndo = useCallback((message, restore) => {
+    clearTimeout(undoTimer.current);
+    setUndo({ message, restore });
+    undoTimer.current = setTimeout(() => setUndo(null), 9000);
+  }, []);
+  const takeUndo = () => {
+    clearTimeout(undoTimer.current);
+    if (undo && undo.restore) undo.restore();
+    setUndo(null);
+  };
   const timers = useTimers();
   const unsynced = useRef(false);          // real edits made here since the last sync
   const lastSyncAt = useRef(0);
@@ -2444,6 +2835,12 @@ function CookingOrganizer() {
         const s = await idb.get("meta", "shopping");
         if (s && Array.isArray(s.mealIds)) setShoppingState({ mealIds: s.mealIds, ticked: s.ticked || {}, extra: s.extra || [] });
       } catch { /* no list yet */ }
+      try { setCookProgress((await idb.get("meta", "cookProgress")) || {}); } catch { /* none */ }
+      try { setPlanState((await idb.get("meta", "plan")) || {}); } catch { /* nothing planned */ }
+      try {
+        const d = await idb.get("meta", "dark");
+        if (d) setDark(d);
+      } catch { /* default to following the system */ }
       await loadAll();
       await refreshBackups();
       try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch { /* unsupported */ }
@@ -2492,6 +2889,34 @@ function CookingOrganizer() {
     if (!ready) return;
     idb.put("meta", shopping, "shopping").catch(() => { });
   }, [shopping, ready]);
+
+  useEffect(() => {
+    if (!ready) return;
+    idb.put("meta", cookProgress, "cookProgress").catch(() => { });
+  }, [cookProgress, ready]);
+
+  const setPlan = setPlanState;
+  useEffect(() => {
+    if (!ready) return;
+    idb.put("meta", plan, "plan").catch(() => { });
+    if (Sync.user) Sync.setMeta("plan", plan).catch(() => { });
+  }, [plan, ready]);
+
+  /* "auto" leaves it to the system, which is what most people want most of the
+     time; the explicit settings are for when it's wrong. */
+  useEffect(() => {
+    const apply = () => {
+      const wantDark = dark === "dark" ||
+        (dark === "auto" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+      document.documentElement.setAttribute("data-theme", wantDark ? "dark" : "light");
+    };
+    apply();
+    if (dark !== "auto" || !window.matchMedia) return;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    mq.addEventListener ? mq.addEventListener("change", apply) : mq.addListener(apply);
+    return () => { mq.removeEventListener ? mq.removeEventListener("change", apply) : mq.removeListener(apply); };
+  }, [dark]);
+  const changeDark = (d) => { setDark(d); idb.put("meta", d, "dark").catch(() => { }); };
 
   const setBackground = (b) => {
     setBackgroundState(b);
@@ -2561,10 +2986,18 @@ function CookingOrganizer() {
 
       savedIds.current = list.map((m) => m.id);
       setDirty(false);
+      setSaveError("");
       refreshUsage();
       if (!quiet) flash("Saved ✓ (" + list.length + " meals)");
-    } catch {
-      if (!quiet) flash("Couldn't save to this browser's storage — use Download backup to keep a copy.");
+    } catch (err) {
+      /* A failed autosave used to be swallowed: nothing was written, nothing was
+         said, and the header sat on "saving…" indefinitely while you carried on
+         believing your work was safe. Whatever else happens, this must be loud. */
+      const full = err && (err.name === "QuotaExceededError" || /quota/i.test(err.message || ""));
+      setSaveError(full
+        ? "This browser's storage is full, so nothing new is being saved."
+        : "Couldn't save to this browser's storage.");
+      if (!quiet) flash("Save failed — use Download backup to keep a copy.");
     }
   }, [refreshUsage, refreshBackups]);
 
@@ -2722,10 +3155,9 @@ function CookingOrganizer() {
   const mealFromRecipe = (p) => ({
     ...newMeal(),
     name: p.name, mealType: p.mealType, device: p.device,
-    prepTime: p.prepTime, ingredients: p.ingredients,
+    prepTime: p.prepTime, ingredients: p.ingredients, servings: p.servings || null,
     instructions: stepsToText(p.steps),
-    notes: [p.temp ? "Oven / air fryer: " + p.temp + " °C" : "", p.servings ? "Serves " + p.servings : ""]
-      .filter(Boolean).join("\n"),
+    notes: p.temp ? "Oven / air fryer: " + p.temp + " °C" : "",
   });
   const createFromRecipe = (p) => {
     const m = mealFromRecipe(p);
@@ -2741,14 +3173,29 @@ function CookingOrganizer() {
     updateMeal(open.id)((m) => ({
       ...m,
       name: p.name || m.name, mealType: p.mealType, device: p.device, prepTime: p.prepTime,
+      servings: p.servings || m.servings || null,
       ingredients: [...(m.ingredients || []), ...p.ingredients],
       instructions: stepsToText([...stepsOf(m.instructions), ...p.steps]),
-      notes: [m.notes, p.temp ? "Oven / air fryer: " + p.temp + " °C" : "", p.servings ? "Serves " + p.servings : ""]
-        .filter(Boolean).join("\n"),
+      notes: [m.notes, p.temp ? "Oven / air fryer: " + p.temp + " °C" : ""].filter(Boolean).join("\n"),
     }));
     setPasteOpen(false);
     flash("Filled in “" + p.name + "”.");
   };
+  const finishedCooking = (id) => {
+    updateMeal(id)((m) => ({ ...m, cookLog: [...(m.cookLog || []), Date.now()] }));
+    setCookProgress((p) => ({ ...p, [id]: { done: {}, got: {}, at: Date.now() } }));
+    setCookId(null);
+    const m = mealsRef.current.find((x) => x.id === id);
+    const n = ((m && m.cookLog) || []).length + 1;
+    flash("Logged — that's " + n + (n === 1 ? " time" : " times") + " you've cooked this.");
+  };
+
+  const addToShopping = (id) => {
+    setShopping((s) => ({ ...s, mealIds: [...new Set([...(s.mealIds || []), id])] }));
+    const m = mealsRef.current.find((x) => x.id === id);
+    flash("Added " + (m ? "“" + m.name + "”" : "it") + " to the shopping list.");
+  };
+
   const addStarter = (recipe) => {
     const m = {
       ...newMeal(),
@@ -2894,7 +3341,10 @@ function CookingOrganizer() {
   };
   const backupsPanel = {
     backups, busy: !ready,
-    onCreate: async () => { const c = await makeSnapshot("manual"); if (c) flash("Backup created — code " + c + "."); },
+    onCreate: async (label) => {
+      const c = await makeSnapshot(label || "manual");
+      if (c) flash("Backup created — code " + c + (label ? " (" + label + ")" : "") + ".");
+    },
     onRestore: restoreSnapshot,
     onDelete: async (code) => { await idb.del("backups", code); await refreshBackups(); flash("Backup " + code + " deleted."); },
   };
@@ -2927,10 +3377,27 @@ function CookingOrganizer() {
               ${Object.entries(FRAMES).map(([k, f]) => html`<option key=${k} value=${k}>${f.label}</option>`)}
             </select>
           </label>
-          <span className=${"savestate" + (dirty ? " savestate-dirty" : "")}>${dirty ? "saving…" : "auto-saved ✓"}</span>
+          <label className="frame-sel">Light
+            <select value=${dark} onChange=${(e) => changeDark(e.target.value)}>
+              <option value="auto">Match my device</option>
+              <option value="light">Always light</option>
+              <option value="dark">Always dark</option>
+            </select>
+          </label>
+          <span className=${"savestate" + (saveError ? " savestate-error" : dirty ? " savestate-dirty" : "")}>
+            ${saveError ? "⚠ not saved" : dirty ? "saving…" : "auto-saved ✓"}
+          </span>
           <button className="btn btn-primary" onClick=${() => saveAll(false)}>Save</button>
         </div>
       </header>
+
+      ${saveError && html`
+        <div className="save-banner">
+          <b>${saveError}</b> Your meals are still here in this window, but they aren't being written to
+          disk — closing the tab would lose recent changes.
+          <button className="btn" onClick=${backup}>Download a backup now</button>
+          <button className="btn" onClick=${() => saveAll(false)}>Try saving again</button>
+        </div>`}
 
       ${MISSING_FILES.length > 0 && html`
         <div className="missing-banner">
@@ -2949,13 +3416,15 @@ function CookingOrganizer() {
           <div className="page">
             <button className="btn btn-ghost back" onClick=${() => setTab("meals")}>← All meals</button>
             <${MealDetail} meal=${open} update=${updateMeal(open.id)} onDelete=${() => setConfirmDelete(open)}
-              have=${haveSet} onPasteRecipe=${() => setPasteOpen(true)} onCook=${() => setCookId(open.id)} />
+              have=${haveSet} onPasteRecipe=${() => setPasteOpen(true)} onCook=${() => setCookId(open.id)}
+              onAddToShopping=${addToShopping} inShopping=${(shopping.mealIds || []).includes(open.id)}
+              offerUndo=${offerUndo} />
           </div>`
         : tab === "meals"
         ? html`
           <div className="page">
             <${MealsTab} meals=${meals} onOpen=${setTab} onFav=${toggleFav} onNew=${addMeal}
-              onPasteRecipe=${() => setPasteOpen(true)} />
+              onPasteRecipe=${() => setPasteOpen(true)} onCook=${setCookId} />
           </div>`
         : tab === "search"
         ? html`
@@ -2967,7 +3436,8 @@ function CookingOrganizer() {
           <div className="page">
             <${PantryTab} meals=${meals} pantry=${pantry} setPantry=${setPantry}
               onOpen=${setTab} onAddStarter=${addStarter}
-              shopping=${shopping} setShopping=${setShopping} />
+              shopping=${shopping} setShopping=${setShopping}
+              plan=${plan} setPlan=${setPlan} onCook=${setCookId} />
           </div>`
         : tab === "temps"
         ? html`
@@ -3008,9 +3478,18 @@ function CookingOrganizer() {
 
       <${TimerBar} timers=${timers.timers} stop=${timers.stop} addMinute=${timers.addMinute} />
 
-      ${cooking && html`<${CookMode} meal=${cooking} timers=${timers} onClose=${() => setCookId(null)} />`}
+      ${cooking && html`
+        <${CookMode} meal=${cooking} timers=${timers} onClose=${() => setCookId(null)}
+          progress=${cookProgress} setProgress=${setCookProgress} onFinished=${finishedCooking} />`}
 
-      ${status && tab !== "overview" && html`<div className="toast">${status}</div>`}
+      ${undo
+        ? html`
+          <div className="toast toast-undo">
+            ${undo.message}
+            <button onClick=${takeUndo}>Undo</button>
+            <button className="toast-x" aria-label="Dismiss" onClick=${() => setUndo(null)}>✕</button>
+          </div>`
+        : status && tab !== "overview" && html`<div className="toast">${status}</div>`}
     </div>`;
 }
 

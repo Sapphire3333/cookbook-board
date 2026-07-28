@@ -29,7 +29,14 @@ syncs too.
 ## What it does
 
 **Every meal**
-- Name, meal type, device, prep time, rating out of 10, favourite star
+- Name, meal type, device, prep time, servings, rating out of 10, favourite star
+- Rate by **tapping stars** (half-stars included) or type the exact number
+- **Scale the amounts** — ×2, ×3, ÷2, or "make it serve 6" — and every ingredient
+  with a number in it is rewritten: *500 g* becomes *1 kg*, *½ onion* becomes
+  *1 onion*. Lines without an amount are left alone, and it's undoable
+- **Cook history** — every time you finish something in Cook mode it's logged, so
+  a meal shows "cooked 7 times · last in March". Sort your list by *not cooked in
+  longest* or *cooked most often*
 - **Other preparations** — the same meal in the air fryer *and* the oven, each with
   its own prep time and rating (leave either blank if you haven't tried it), and a
   *make main* button to promote one to the headline version
@@ -40,15 +47,21 @@ syncs too.
   with, what to change next time, who liked it
 
 **Cook mode** — for actually cooking, not writing
-- One tap from any meal: large type, ingredients pinned at the top, nothing
-  editable so you can't wreck the recipe with wet hands
-- Tap a step to tick it off; a progress bar shows how far through you are
+- One tap from any meal, or the ▶ on any card in the list
+- Large type, ingredients pinned at the top, nothing editable so you can't wreck
+  the recipe with wet hands
+- Tap a step to tick it off; a progress bar shows how far through you are.
+  **Your ticks are remembered**, so answering the door doesn't lose your place
+- **✓ I cooked this** logs the date and clears the ticks for next time
 - **The screen is kept awake** while you're in it (where the browser allows it —
   it says so plainly when it can't)
 - **Tap any time in a step to start a timer.** "Roast for 1 hour 20 minutes"
   becomes one 80-minute countdown, not two. Run as many as you need at once —
   they show in a bar at the bottom, keep correct time in a background tab, and
   ring and buzz when they're up. *+1* adds a minute or snoozes a finished one.
+- Timers **survive closing the app**: they're stored as the moment they end, so
+  reopening picks the countdown up wherever the clock actually is. If you've
+  allowed notifications, a finished timer reaches you even in another app.
 
 **The meal page**
 - **View / Arrange / Draw** modes
@@ -64,6 +77,9 @@ syncs too.
 - **Tables** you can drop in and type into — three columns by default, or filled
   in for you from the temperature charts
 - Pick any photo as the **list image** shown on the meal's card
+- **Tap the ⤢ on any photo to see it full size**, with arrow keys to move between
+  photos. The photos themselves stay click-through, so fields underneath them
+  are still usable
 - Grow the page whenever you run out of room
 - Nothing can be stranded off the edge: drops and resizes stay inside the page,
   so a layout made on a laptop stays reachable on a phone
@@ -84,17 +100,29 @@ syncs too.
   you want to add yourself
 - Suggestions ranked by how much of each recipe you already have, drawn from
   **14 built-in recipes and your own saved meals**
+- Matching is deliberately cautious: having *chicken breast* counts as having
+  *chicken*, but having *butter* does **not** count as having *peanut butter*.
+  Being told to buy a spare is much cheaper than finding out at the stove
 - *Only what I can cook now* filters to complete matches
 - Salt, pepper, oil, flour, sugar, onion and garlic are assumed — you're not
   nagged about staples
 - Add any built-in recipe to your own meals in one click
 
+**Week plan**
+- Seven days at a glance, with arrows to move between weeks and today marked
+- Drop any meal onto any day — more than one if you're batch cooking — and open
+  or start cooking it straight from the plan
+- **Send the whole week to the shopping list** in one click
+
 **Shopping list**
-- Tick the meals you're cooking this week and the list builds itself: everything
-  those recipes need that your pantry doesn't have
+- Built from your week plan, or by ticking meals directly: everything those
+  recipes need that your pantry doesn't have
 - **Grouped by aisle** — spices, vegetables, meat, tins, dairy — in the order
   you'd walk a shop
-- Each line says which meals wanted it, so you know whether one onion is enough
+- Each line says which meals wanted it, so you know whether one onion is enough.
+  When two recipes want different amounts of the same thing, both are shown
+  rather than one being picked — free-text amounts can't honestly be added up
+- Staples are left off, including combined lines like "salt and pepper"
 - Tick things off as you shop, add anything else by hand, copy the lot as text
 - Survives closing the app, so you can build it at home and use it in the shop
 
@@ -126,8 +154,17 @@ syncs too.
 - **12 page backgrounds** — plain, linen, notebook grid, dots, washes, picnic
   check, marble — or **use your own picture**, faded and fixed so the writing
   stays readable
+- **Dark mode**, following your device by default, or forced light or dark. The
+  backgrounds are all pale by design, so dark mode replaces them outright rather
+  than dimming them — a light wash under light text is worse than none
 - Six decorative frame themes around the whole app
-- Both are remembered between visits and follow you across devices if sync is on
+- All remembered between visits and carried across devices if sync is on
+
+**Printing**
+- Print any recipe and you get the recipe — name, ingredients, numbered steps and
+  notes — with no navigation, toolbars or dotted board, and steps that don't split
+  across a page break
+- The shopping list prints as a plain tick list, grouped by aisle
 
 **Safety nets**
 - Autosaves about 1.5 seconds after you stop changing things, plus a manual Save
@@ -140,6 +177,10 @@ syncs too.
   restoring is itself undoable. The newest 20 are kept
 - **Download backup** / **Restore from backup file** as a single JSON
 - *Restore last save* to throw away unsaved changes
+- **If saving ever fails** — a full disk is the usual cause — it says so loudly
+  instead of sitting on "saving…" while you assume all is well, and offers you a
+  backup download there and then
+- Destructive buttons like *clear drawings* offer an **Undo** for a few seconds
 
 ---
 
@@ -278,7 +319,7 @@ IndexedDB database **`cookbook`**, three stores:
 | `meals` | One record per meal — everything except the photo bytes. |
 | `images` | One JPEG blob per photo, keyed `<mealId>__<itemId>`. |
 | `backups` | Numbered snapshots, keyed by their 4-digit code. |
-| `meta` | `settings` (frame theme), `index` (meal order), `pantry`, `customTemps`, `background`, `shopping`, `deletions` (tombstones). |
+| `meta` | `settings` (frame theme), `index` (meal order), `pantry`, `customTemps`, `background`, `dark`, `shopping`, `plan`, `timers`, `cookProgress`, `deletions` (tombstones). |
 
 Your chosen background picture is stored in `images` under the reserved key
 `__background__`, so it belongs to no meal and the clean-up pass leaves it alone.
