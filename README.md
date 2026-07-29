@@ -72,6 +72,9 @@ syncs too.
   where there's free room, not a boundary
 - Drag anything, resize from the corner, fade a photo with the opacity slider,
   send it to the back or bring it to the front
+- **Rotate a sideways photo** with one tap (⟳ in Arrange mode) — the rotation is
+  baked into the picture itself, so the card thumbnail, backups and sync all
+  agree which way up it is
 - **Notepads** that things stick to: drop a photo, a table or a drawing on a pad
   and it travels with the pad when you move it
 - **Tables** you can drop in and type into — three columns by default, or filled
@@ -184,6 +187,10 @@ syncs too.
   instead of sitting on "saving…" while you assume all is well, and offers you a
   backup download there and then
 - Destructive buttons like *clear drawings* offer an **Undo** for a few seconds
+- **Ctrl+Z undoes any meal edit** — typing, drags, resizes, drawings, rescales —
+  and Ctrl+Y (or Ctrl+Shift+Z) redoes. Quick bursts of typing undo as one step,
+  not letter by letter. Adding, deleting and restoring meals sit outside it,
+  because they have their own safety nets (the confirmation and backup codes)
 
 ---
 

@@ -209,6 +209,31 @@ async function processImageFile(file) {
     if (src) URL.revokeObjectURL(src);
   }
 }
+/* Rotates the actual pixels 90° clockwise and re-encodes, rather than laying a
+   CSS transform over the top. Baking it in means the card thumbnail, the
+   lightbox, backup files and the synced copy all agree on which way up the
+   photo is, with no special rendering anywhere. Re-encoding costs a sliver of
+   JPEG quality per turn — invisible once, and nobody rotates the same photo
+   forty times. */
+async function rotateBlob(blob) {
+  let src = null;
+  try {
+    src = URL.createObjectURL(blob);
+    const img = await loadImgEl(src);
+    const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+    if (!w || !h) throw new Error("no dimensions");
+    const c = document.createElement("canvas");
+    c.width = h; c.height = w;                    // dimensions swap
+    const g = c.getContext("2d");
+    g.translate(h, 0);
+    g.rotate(Math.PI / 2);
+    g.drawImage(img, 0, 0);
+    return await canvasToBlob(c, "image/jpeg", 0.82);
+  } finally {
+    if (src) URL.revokeObjectURL(src);
+  }
+}
+
 function blobToDataURL(blob) {
   return new Promise((res, rej) => {
     const r = new FileReader();
@@ -832,7 +857,7 @@ function ColorWheel({ color, onChange }) {
 /*  the instructions. The dotted area is just a hint about where       */
 /*  there's free room.                                                 */
 /* ------------------------------------------------------------------ */
-function PageCanvas({ meal, mode, draw, update, pageRef, onViewPhoto }) {
+function PageCanvas({ meal, mode, draw, update, pageRef, onViewPhoto, onRotate }) {
   const dragRef = useRef(null);
   const drawRef = useRef(null);
   const layerRef = useRef(null);
@@ -1103,6 +1128,8 @@ function PageCanvas({ meal, mode, draw, update, pageRef, onViewPhoto }) {
             ${mode === "arrange" && html`
               <${Frag}>
                 <div className="img-ctrl" onPointerDown=${(e) => e.stopPropagation()}>
+                  <button title="Rotate 90°" aria-label="Rotate this photo 90 degrees"
+                    onClick=${() => onRotate(it)}>⟳</button>
                   <button title="Send to back" onClick=${() => toBack(it.id)}>⬇ back</button>
                   <button title="Bring to front" onClick=${() => toFront(it.id)}>⬆ front</button>
                   <input type="range" min="10" max="100" title="Transparency"
@@ -1468,6 +1495,26 @@ function MealDetail({ meal, update, onDelete, have, onPasteRecipe, onCook, onAdd
     return () => document.removeEventListener("paste", onPaste);
   }, [addImages]);
 
+  const rotatePhoto = useCallback(async (item) => {
+    const key = imgKey(mealId, item.id);
+    try {
+      const blob = await idb.get("images", key);
+      if (!blob) return;
+      const rotated = await rotateBlob(blob);
+      await idb.put("images", rotated, key);
+      dropUrl(key);
+      const src = urlFor(key, rotated);
+      update((m) => ({
+        ...m,
+        items: m.items.map((x) => (x.id === item.id
+          // Width and height trade places, and `remote` is cleared so the next
+          // sync uploads the rotated pixels over the old ones.
+          ? { ...x, w: x.h, h: x.w, src, remote: undefined }
+          : x)),
+      }));
+    } catch { /* unreadable photo — leave it as it is */ }
+  }, [update, mealId]);
+
   const addNote = () => update((m) => {
     const boardW = boardRef.current ? boardRef.current.offsetWidth : 900;
     const w = Math.min(240, Math.max(140, boardW - 48));
@@ -1647,7 +1694,7 @@ function MealDetail({ meal, update, onDelete, have, onPasteRecipe, onCook, onAdd
               </div>`}
           </div>`}
         ${mode === "arrange" && html`
-          <span className="hint">drag anything anywhere on the page · corner handle resizes · drop onto a notepad and it sticks</span>`}
+          <span className="hint">drag anything anywhere on the page · corner handle resizes · drop onto a notepad and it sticks · Ctrl+Z undoes</span>`}
         ${mode === "view" && html`
           <span className="hint">switch to Arrange to move photos, pads and tables around the page</span>`}
       </div>
@@ -1671,7 +1718,8 @@ function MealDetail({ meal, update, onDelete, have, onPasteRecipe, onCook, onAdd
       </div>
 
       <${PageCanvas} meal=${meal} mode=${mode} draw=${{ tool, color, size }} update=${update} pageRef=${pageRef}
-        onViewPhoto=${(id) => setLightbox(Math.max(0, photos.findIndex((p) => p.id === id)))} />
+        onViewPhoto=${(id) => setLightbox(Math.max(0, photos.findIndex((p) => p.id === id)))}
+        onRotate=${rotatePhoto} />
 
       ${lightbox !== null && html`
         <${Lightbox} photos=${photos} index=${lightbox} onIndex=${setLightbox} onClose=${() => setLightbox(null)} />`}
@@ -3137,6 +3185,7 @@ function CookingOrganizer() {
         }
         if (data.pantry && data.pantry.have) setPantry({ have: data.pantry.have, custom: data.pantry.custom || [] });
         if (Array.isArray(data.customTemps)) setCustomTemps(data.customTemps);
+        resetHistory();
         setMeals(restored);
         touched();
         flash("Backup loaded (" + restored.length + " meals) — press Save to keep it.");
@@ -3162,6 +3211,7 @@ function CookingOrganizer() {
         await Sync.fetchPhotos(m);          // no-op when signed out or already held
         restored.push(await hydrateMeal(m));
       }
+      resetHistory();
       setMeals(restored);
       touched();
       await refreshBackups();
@@ -3176,7 +3226,72 @@ function CookingOrganizer() {
      edit and start an endless sync loop. */
   const touched = () => { setDirty(true); unsynced.current = true; };
 
+  /* ---------- Ctrl+Z history ----------
+     Every content edit funnels through updateMeal, so that's the one place
+     history is recorded. Edits landing within a second of each other coalesce
+     into one step — Ctrl+Z takes back the word you typed, not one letter.
+     Sync pulls call setMeals directly and so never enter the history; adding,
+     deleting and restoring reset it, because undoing across those boundaries
+     has its own machinery (tombstones, backup codes) that a plain state swap
+     would bypass. */
+  const histUndo = useRef([]);
+  const histRedo = useRef([]);
+  const lastPushAt = useRef(0);
+  const resetHistory = () => { histUndo.current = []; histRedo.current = []; lastPushAt.current = 0; };
+
+  const pushHistory = () => {
+    const now = Date.now();
+    if (now - lastPushAt.current < 1000 && histUndo.current.length) { lastPushAt.current = now; return; }
+    lastPushAt.current = now;
+    histUndo.current.push(mealsRef.current);
+    if (histUndo.current.length > 60) histUndo.current.shift();
+    histRedo.current = [];
+  };
+
+  /* Meals whose content actually changed get a fresh modified stamp, so sync
+     treats an undo as the newest edit instead of pulling the undone version
+     straight back down. Untouched meals keep their identity. */
+  const applyHistory = useCallback((target, label) => {
+    const now = Date.now();
+    setMeals((cur) => {
+      const curById = new Map(cur.map((m) => [m.id, m]));
+      return target.map((m) => (curById.get(m.id) === m ? m : { ...m, modified: now }));
+    });
+    setDirty(true); unsynced.current = true;
+    flash(label);
+  }, []);
+  const doUndo = useCallback(() => {
+    const prev = histUndo.current.pop();
+    if (!prev) return;
+    lastPushAt.current = 0;                 // the next edit starts a fresh step
+    histRedo.current.push(mealsRef.current);
+    applyHistory(prev, "Undone (Ctrl+Y redoes).");
+  }, [applyHistory]);
+  const doRedo = useCallback(() => {
+    const next = histRedo.current.pop();
+    if (!next) return;
+    lastPushAt.current = 0;
+    histUndo.current.push(mealsRef.current);
+    applyHistory(next, "Redone.");
+  }, [applyHistory]);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const k = (e.key || "").toLowerCase();
+      if (k !== "z" && k !== "y") return;
+      // Modals and cook mode keep their own keys; the paste box especially
+      // shouldn't have the whole cookbook lurch beneath it.
+      if (e.target && e.target.closest && e.target.closest(".modal-back, .cook, .lightbox")) return;
+      e.preventDefault();
+      if (k === "y" || e.shiftKey) doRedo(); else doUndo();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [doUndo, doRedo]);
+
   const updateMeal = (id) => (fnOrPatch) => {
+    pushHistory();
     setMeals((ms) => ms.map((m) => {
       if (m.id !== id) return m;
       const next = typeof fnOrPatch === "function" ? fnOrPatch(m) : { ...m, ...fnOrPatch };
@@ -3185,7 +3300,7 @@ function CookingOrganizer() {
     touched();
   };
   const toggleFav = (id) => updateMeal(id)((m) => ({ ...m, favorite: !m.favorite }));
-  const addMeal = () => { const m = newMeal(); setMeals((ms) => [...ms, m]); touched(); setTab(m.id); };
+  const addMeal = () => { const m = newMeal(); resetHistory(); setMeals((ms) => [...ms, m]); touched(); setTab(m.id); };
 
   /* Deleting takes a snapshot first, so the 4-digit code in the toast is a real
      way back rather than a consolation. */
@@ -3195,6 +3310,7 @@ function CookingOrganizer() {
     try { code = await createBackup(mealsRef.current, "before deleting " + meal.name); await refreshBackups(); }
     catch { /* a failed snapshot must not block the delete the user asked for */ }
     deletions.current = { ...deletions.current, [meal.id]: Date.now() };
+    resetHistory();
     setMeals((ms) => ms.filter((m) => m.id !== meal.id));
     touched();
     setTab("meals");
@@ -3231,6 +3347,7 @@ function CookingOrganizer() {
   });
   const createFromRecipe = (p) => {
     const m = mealFromRecipe(p);
+    resetHistory();
     setMeals((ms) => [...ms, m]);
     touched();
     setPasteOpen(false);
@@ -3274,6 +3391,7 @@ function CookingOrganizer() {
       ingredients: [...recipe.ingredients], instructions: recipe.instructions,
       fromStarter: recipe.id,   // so the original stops being suggested alongside it
     };
+    resetHistory();
     setMeals((ms) => [...ms, m]);
     touched();
     setTab(m.id);
@@ -3320,6 +3438,9 @@ function CookingOrganizer() {
       }
 
       if (pulled.length || Object.keys(mergedDel).length) {
+        // Meals just changed under the history's feet — undoing across a sync
+        // would resurrect pre-sync content and push it back up as an "edit".
+        if (pulled.length) resetHistory();
         setMeals((ms) => {
           const map = new Map(ms.map((m) => [m.id, m]));
           for (const p of pulled) map.set(p.id, p);

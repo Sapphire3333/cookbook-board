@@ -18,10 +18,21 @@
    start-up check at the bottom of this file can show it. */
 window.__bootErrors = [];
 window.addEventListener("error", function (e) {
-  window.__bootErrors.push(
-    e.message + (e.filename ? "  —  " + String(e.filename).split("/").pop() +
-    (e.lineno ? ":" + e.lineno : "") : "")
-  );
+  /* Two different events arrive here. A script that RAN and threw is an
+     ErrorEvent with a message and line number. A file that never ARRIVED fires
+     a plain event on the <script> element itself — no message at all, which
+     once produced bare "undefined" lines in this report. */
+  var el = e.target;
+  if (el && el !== window && (el.src || el.href)) {
+    window.__bootErrors.push("Failed to load  —  " + String(el.src || el.href).split("/").slice(-2).join("/"));
+    return;
+  }
+  if (e.message) {
+    window.__bootErrors.push(
+      e.message + (e.filename ? "  —  " + String(e.filename).split("/").pop() +
+      (e.lineno ? ":" + e.lineno : "") : "")
+    );
+  }
 }, true);
 window.addEventListener("unhandledrejection", function (e) {
   window.__bootErrors.push("Unhandled promise: " + (e.reason && e.reason.message || e.reason));
@@ -756,7 +767,6 @@ if ("serviceWorker" in navigator) {
       ["app.js", window.__cookbookLoaded, "this site"]
     ];
     var missing = parts.filter(function (p) { return !p[1]; });
-    var fromCdn = missing.filter(function (p) { return p[2] !== "this site"; }).length > 0;
     var errs = window.__bootErrors || [];
 
     var h = '<div class="crash"><h2>The app didn\'t start</h2>';
@@ -764,12 +774,9 @@ if ("serviceWorker" in navigator) {
 
     if (missing.length) {
       h += "<p><b>Didn't load:</b> " + missing.map(function (p) { return p[0]; }).join(", ") + "</p>";
-      h += fromCdn
-        ? '<p class="crash-hint">Parts of this list come from the <b>cdn.jsdelivr.net</b> code network. ' +
-          "A blocked connection, an ad blocker or an offline moment will stop them arriving. " +
-          "Try again with any blocker paused.</p>"
-        : '<p class="crash-hint">These files sit next to index.html on the site. ' +
-          "Check they uploaded, and that the names match exactly — capital letters count.</p>";
+      h += '<p class="crash-hint">Every file the app needs sits on this site, next to index.html — ' +
+        "including the <b>vendor/</b> folder. Check they all uploaded, that the names match exactly " +
+        "(capital letters count), and that vendor/ kept its folder structure.</p>";
     } else {
       h += "<p>Every file arrived, so this is an error inside the app itself.</p>";
     }
