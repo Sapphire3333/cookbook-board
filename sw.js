@@ -5,9 +5,13 @@
 
    Deliberately never touches Supabase traffic — API and Storage requests always
    go to the network, so you can't be served a stale cookbook. */
-const CACHE = "cookbook-v3";
+/* The build stamp arrives in this worker's own address (sw.js?v=…), put there
+   by index.html from version.js. Naming the cache after it means every build
+   gets a fresh cache and the old one is deleted on activate — stale files
+   can't outlive the build they belonged to. */
+const CACHE = "cookbook-" + (new URL(self.location.href).searchParams.get("v") || "v3");
 const SHELL = ["./", "./index.html", "./app.js", "./data.js", "./recipe-parser.js",
-  "./config.js", "./manifest.json", "./icon.svg",
+  "./version.js", "./config.js", "./manifest.json", "./icon.svg",
   "./vendor/react.production.min.js", "./vendor/react-dom.production.min.js",
   "./vendor/htm.umd.js", "./vendor/supabase.js"];
 

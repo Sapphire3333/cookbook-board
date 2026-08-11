@@ -1,0 +1,26 @@
+#!/bin/sh
+# Stamps version.js with today's date (plus a counter for a second commit on
+# the same day) so every build carries its own name. The app shows the stamp,
+# and the service worker's cache is named after it — which is what guarantees
+# a new build can never be served from an old cache.
+#
+# This hook only runs if git is told where to find it (once per machine):
+#   git config core.hooksPath .githooks
+
+d=$(date +%Y-%m-%d)
+n=1
+if [ -f version.js ]; then
+  cur=$(sed -n 's/.*APP_VERSION = "\([^"]*\)".*/\1/p' version.js)
+  case "$cur" in
+    "$d".*) n=$(( ${cur##*.} + 1 )) ;;
+  esac
+fi
+
+cat > version.js <<EOF
+/* Build stamp — written by .githooks/pre-commit at every commit; do not edit.
+   The app shows it, and the offline cache is named after it, so a new build
+   can never be served from an old cache. */
+window.APP_VERSION = "$d.$n";
+EOF
+
+git add version.js

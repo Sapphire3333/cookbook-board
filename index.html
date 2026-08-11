@@ -727,6 +727,7 @@ select,input[type=number]{border:1px solid var(--line-dark);border-radius:7px;pa
      from cdn.jsdelivr.net, which meant every single visit depended on a third
      party being reachable — one blocked request and the app simply didn't
      start. These are the same files, committed alongside the app. -->
+<script src="version.js"></script>
 <script src="vendor/react.production.min.js"></script>
 <script src="vendor/react-dom.production.min.js"></script>
 <script src="vendor/htm.umd.js"></script>
@@ -740,9 +741,12 @@ select,input[type=number]{border:1px solid var(--line-dark);border-radius:7px;pa
 /* Registering the worker here rather than at the end of app.js. If app.js ever
    fails to parse, everything after it never runs — which used to mean the very
    failure that needed offline caching was the one that prevented it. */
+/* the build stamp rides along in the worker's address: a new build is a new
+   address, so the browser must fetch the new worker — and the worker names its
+   cache after the stamp, so a new build can never serve stale files */
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", function () {
-    navigator.serviceWorker.register("./sw.js").catch(function () { /* offline start-up won't work */ });
+    navigator.serviceWorker.register("./sw.js?v=" + encodeURIComponent(window.APP_VERSION || "dev")).catch(function () { /* offline start-up won't work */ });
   });
 }
 </script>

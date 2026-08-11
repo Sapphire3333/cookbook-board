@@ -2739,6 +2739,7 @@ function Overview(props) {
       <${BackupsPanel} ...${props.backupsPanel} />
       <${CloudPanel} ...${props.cloud} />
       <${BackgroundPanel} ...${props.background} />
+      <p className="sub" style=${{ opacity: 0.7, fontSize: "12px" }}>Build ${window.APP_VERSION || "unknown"}</p>
     </div>`;
 }
 
