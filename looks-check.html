@@ -303,7 +303,8 @@ button.opt.on{background:var(--herb);border-color:var(--herb);color:#fff}
         <input type="range" id="depth" min="0" max="100" step="5" value="0">
         <b id="depthn">as now</b>
       </label>
-      <span class="note">0 is exactly today's palette. Drag right to see how far it can go before the cards stop sitting comfortably on it.</span>
+      <span class="note">Applies to the <b>candidates</b> lower down, not to your existing twelve — those have
+        no deeper end to go to, which is rather the point. 0 leaves the candidates as pale as today's palette.</span>
     </div>
     <h3>The twelve you have</h3>
     <div class="bggrid" id="bgOld"></div>
@@ -315,12 +316,12 @@ button.opt.on{background:var(--herb);border-color:var(--herb);color:#fff}
   <div class="card">
     <h2>4 · Ways of sorting your meals</h2>
     <p class="sub">
-      Items 5 and 7 both ask for categories, so here is every scheme I could build, run over
-      <b id="mealN">your</b> actual meals. A scheme is only worth having if it genuinely divides your
-      cookbook — one that puts nearly everything in a single bucket looks like a category system and
-      works like a label. The line at the bottom of each says how well it splits, and any bucket
-      holding more than half of everything is marked in orange.
+      Items 5 and 7 both ask for categories, so here is every scheme I could build, run over real meals.
+      A scheme is only worth having if it genuinely divides a cookbook — one that puts nearly everything
+      in a single bucket looks like a category system and works like a label. The line at the bottom of
+      each says how well it splits, and any bucket holding more than half of everything is marked orange.
     </p>
+    <div class="warn" id="catScope" hidden></div>
     <div class="schemes" id="schemes"></div>
     <div class="verdict" id="catVerdict"></div>
   </div>
@@ -382,7 +383,15 @@ const STANDINS=[
   items:[]
 }));
 
-let BORROWED=false;
+let BORROWED=false;   /* nothing of theirs at all */
+let REAL=0;           /* how many of the meals below are genuinely theirs */
+
+/* An all-or-nothing fallback was still not enough. A cookbook with one meal in
+   it is not empty, so it went through as real — and then a list layout was
+   judged from a single card, and every way of sorting reported one bucket
+   holding one meal, which answers nothing. Their meals now come first and the
+   stand-ins top the page up to a number you can actually look at. */
+const FLOOR=8;
 
 async function load(){
   const say=document.getElementById("say");
@@ -391,15 +400,22 @@ async function load(){
   try{ db=await openDb(); MEALS=await all(db,"meals"); }
   catch(e){ MEALS=[]; }
 
-  if(!MEALS.length){
-    BORROWED=true;
-    MEALS=STANDINS.slice();
-    db=null;
-    say.innerHTML='<b>Showing stand-in meals.</b> This browser has no cookbook saved at this address, '+
-      'so the page borrowed fourteen ordinary ones to draw with. Every choice below still works — '+
-      'open the same page where your own cookbook lives and it will use yours instead.';
-  }
+  REAL=MEALS.length;
   MEALS.sort((a,b)=>(b.created||0)-(a.created||0));
+
+  if(REAL<FLOOR){
+    const taken=new Set(MEALS.map(m=>String(m.name||"").toLowerCase()));
+    const fill=STANDINS.filter(s=>!taken.has(s.name.toLowerCase())).slice(0,FLOOR*2-REAL);
+    MEALS=MEALS.concat(fill);
+    BORROWED=REAL===0;
+    say.innerHTML=REAL===0
+      ? '<b>Showing stand-in meals.</b> This browser has no cookbook saved at this address, so the page '+
+        'borrowed ordinary ones to draw with. Every choice below still works — open this page where your '+
+        'own cookbook lives and it will use yours instead.'
+      : '<b>Your '+REAL+' meal'+(REAL===1?'':'s')+', plus '+fill.length+' stand-ins to fill the page out.</b> '+
+        'Yours come first and are drawn exactly as they are; the rest are ordinary meals borrowed so there '+
+        'is a real list to look at rather than a single card. As your cookbook grows this page needs them less.';
+  }
 
   /* Photos are read one at a time and only the ones a card would show. A
      cookbook can hold hundreds and pulling them all in at once to decorate a
@@ -416,10 +432,9 @@ async function load(){
     }
   }
 
-  if(!BORROWED)
-    say.textContent=MEALS.length+" of your meals, "+IMGS.size+" of your photos — nothing was changed.";
+  if(REAL>=FLOOR)
+    say.textContent=REAL+" of your meals, "+IMGS.size+" of your photos — nothing was changed.";
   document.getElementById("out").hidden=false;
-  document.getElementById("mealN").textContent=(BORROWED?"the ":"your ")+MEALS.length;
   drawPhones(); drawFrame(); drawBackgrounds(); drawSchemes();
 }
 /* Opens by itself. The button was one more thing to work out before the page
@@ -768,15 +783,30 @@ function drawSchemes(){
       '<div class="score">'+verdict+'</div></div>';
   }).join("");
 
+  /* Whose cookbook this paragraph is actually about. With one real meal every
+     scheme reported a single bucket holding a single meal and then announced
+     that none of them divides the cookbook — true, useless, and stated with a
+     confidence it had not earned. It now says whose meals it is talking about. */
+  const scope=document.getElementById("catScope");
+  if(REAL>=FLOOR){
+    scope.hidden=true;
+  }else{
+    scope.hidden=false;
+    scope.innerHTML=REAL===0
+      ? "<b>These are stand-in meals.</b> Read this section as a demonstration of the shape of each "+
+        "scheme, not as an answer about your cookbook."
+      : "<b>You have "+REAL+" meal"+(REAL===1?"":"s")+" so far, so this section can't answer for real yet.</b> "+
+        "One meal falls into one bucket whatever you sort by. It's running on stand-ins below to show you "+
+        "the shape of each scheme — come back once you've written a dozen and it will answer honestly.";
+  }
+
   const good=results.filter(r=>r.buckets.length>=2&&r.biggest<=0.5).map(r=>r.s.name);
-  const whose=BORROWED?"these "+MEALS.length+" stand-in meals":"your "+MEALS.length+" meals";
-  document.getElementById("catVerdict").innerHTML= (good.length
+  const whose=REAL>=FLOOR?"your "+MEALS.length+" meals":"a cookbook of "+MEALS.length+" ordinary meals";
+  document.getElementById("catVerdict").innerHTML= good.length
     ? "<b>On "+whose+", these divide it properly:</b> "+good.join(", ")+
       ". The rest still work as filter chips — they just don't earn being the thing the page is organised by."
     : "<b>None of these splits "+whose+" evenly</b> — which is itself an argument for categories as chips "+
-      "you tick rather than headings the page is built around.")+
-    (BORROWED?" <em>These are borrowed meals, so treat the numbers as a demonstration — "+
-      "opened where your own cookbook lives, this paragraph answers the question for real.</em>":"");
+      "you tick rather than headings the page is built around.";
 }
 </script>
 </body>
