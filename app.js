@@ -685,19 +685,61 @@ const inside = (cx, cy, it) => cx >= it.x && cx <= it.x + it.w && cy >= it.y && 
 /* ------------------------------------------------------------------ */
 /*  Small UI bits                                                      */
 /* ------------------------------------------------------------------ */
-function Frame({ theme }) {
+/* The scattered emoji are kept clear of the header by starting their layer
+   underneath it — see the note on .frame-spots in index.html for why. The height
+   is measured rather than assumed because the header wraps to two rows on a
+   narrow screen, and a guess would be wrong on exactly the screens where the
+   overlap is worst. */
+function useHeaderHeight(barKey) {
+  useEffect(() => {
+    const bar = document.querySelector(".top");
+    if (!bar) return;
+    const apply = () => document.documentElement.style.setProperty("--frame-top", bar.offsetHeight + "px");
+    apply();
+
+    /* Two ways in, deliberately, because they cover different things and one of
+       them can go quiet. The window resizing is what makes the header wrap from
+       one row to three on a phone, and that event arrives whatever the page is
+       doing. A ResizeObserver catches the rest — opening a meal adds a tab to
+       the nav, which can wrap the header without the window changing at all —
+       but it only delivers while the page is actually drawing frames, so it is
+       the extra, never the only one. Left alone as the sole trigger it silently
+       did nothing and the emoji went straight back over the header. */
+    window.addEventListener("resize", apply);
+    window.addEventListener("orientationchange", apply);
+    const vv = window.visualViewport;
+    if (vv) vv.addEventListener("resize", apply);   // the phone keyboard opening counts too
+    let ro = null;
+    if (window.ResizeObserver) { ro = new ResizeObserver(apply); ro.observe(bar); }
+    return () => {
+      window.removeEventListener("resize", apply);
+      window.removeEventListener("orientationchange", apply);
+      if (vv) vv.removeEventListener("resize", apply);
+      if (ro) ro.disconnect();
+    };
+    /* barKey is whatever changes the header's own contents — the tab you're on
+       and the name of the meal that adds a tab of its own. Re-measuring on that
+       rather than on every render keeps a long name wrapping the header from
+       being missed, without reading the layout during a drawing stroke. */
+  }, [barKey]);
+}
+
+function Frame({ theme, barKey }) {
   const f = FRAMES[theme];
+  useHeaderHeight(barKey);
   if (!f || !f.emoji) return null;
   return html`
     <div className="frame" style=${{ boxShadow: `inset 0 0 0 6px ${f.edge}, inset 0 0 0 8px #FFFFFF` }}>
-      ${FRAME_SPOTS.map((p, i) => html`
-        <span key=${i} className="frame-emoji" style=${{
-          top: p.top !== undefined ? p.top + "%" : "auto",
-          bottom: p.bottom !== undefined ? p.bottom + "%" : "auto",
-          left: p.left !== undefined ? p.left + "%" : "auto",
-          right: p.right !== undefined ? p.right + "%" : "auto",
-          fontSize: p.s, transform: `rotate(${p.r}deg)`,
-        }}>${f.emoji[i % f.emoji.length]}</span>`)}
+      <div className="frame-spots">
+        ${FRAME_SPOTS.map((p, i) => html`
+          <span key=${i} className="frame-emoji" style=${{
+            top: p.top !== undefined ? p.top + "%" : "auto",
+            bottom: p.bottom !== undefined ? p.bottom + "%" : "auto",
+            left: p.left !== undefined ? p.left + "%" : "auto",
+            right: p.right !== undefined ? p.right + "%" : "auto",
+            fontSize: p.s, transform: `rotate(${p.r}deg)`,
+          }}>${f.emoji[i % f.emoji.length]}</span>`)}
+      </div>
     </div>`;
 }
 
@@ -3567,7 +3609,7 @@ function CookingOrganizer() {
 
   return html`
     <div className="app" style=${bgStyle}>
-      <${Frame} theme=${theme} />
+      <${Frame} theme=${theme} barKey=${tab + "|" + (open ? open.name : "")} />
       <header className="top">
         <div className="brand">The Cookbook Board</div>
         <nav className="tabs">

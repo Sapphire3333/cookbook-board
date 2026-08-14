@@ -273,7 +273,16 @@ select,input[type=number]{border:1px solid var(--line-dark);border-radius:7px;pa
 .crash-hint{background:#FFF4E2;border:1px solid #E8C68A;border-radius:8px;padding:10px 12px;font-size:14px}
 .missing-banner{background:#FFF4E2;border-bottom:1px solid #E8C68A;color:#7A5312;
   padding:10px 22px;font-size:13px;line-height:1.5}
+/* The decorative frame. The edge tint runs right around the window, but the
+   scattered emoji do NOT: they used to be placed against the whole viewport, and
+   the top row sat at 4% down and 3% in — about 36px by 43px on an ordinary
+   window, which is exactly where the brand and the tabs are. At z-index 999
+   against the header's 50 they were painted straight over "The Cookbook Board".
+   So the emoji get their own layer that starts below the header, whose real
+   height is measured and written to --frame-top (the header wraps to two rows on
+   a phone, so a fixed number would be wrong on half the screens there are). */
 .frame{position:fixed;inset:0;pointer-events:none;z-index:999}
+.frame-spots{position:absolute;top:var(--frame-top,0px);left:0;right:0;bottom:0}
 .frame-emoji{position:absolute;line-height:1;filter:drop-shadow(0 1px 1px rgba(31,36,25,.15))}
 .main-label{font-size:12px;color:var(--herb-dark);font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
 .main-label span{font-weight:400;color:var(--muted);text-transform:none;letter-spacing:0}

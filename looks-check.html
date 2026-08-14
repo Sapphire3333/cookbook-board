@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Cookbook Board — pick how it should look</title>
+<style>
+/* This page is a showroom, not the app. It opens the cookbook saved in THIS
+   browser, borrows your real meals, and draws each option with them in it —
+   because a background described in words always sounds fine, and a phone
+   layout described in words always sounds fine, and neither tells you whether
+   you'd actually want to look at it. Nothing here is ever written back. */
+:root{
+  --bg:#F3F5EF; --panel:#FFFFFF; --ink:#1F2419; --muted:#6C7263;
+  --line:#DFE4D6; --line-dark:#B9C0AC; --herb:#3E6B4F; --herb-dark:#2E523C;
+  --paprika:#D8622B; --note:#FFF7CF;
+  color-scheme:light;
+}
+@media(prefers-color-scheme:dark){
+  :root{
+    --bg:#181C16; --panel:#22271F; --ink:#E7EBE2; --muted:#9AA391;
+    --line:#333A2E; --line-dark:#4A5342; --herb:#6FA97F; --herb-dark:#8DC49B;
+    --paprika:#E5834F; --note:#4A461F;
+    color-scheme:dark;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;padding:20px;background:var(--bg);color:var(--ink);
+  font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+h1{font-family:Georgia,serif;font-size:24px;margin:0 0 6px;color:var(--herb-dark)}
+h2{font-family:Georgia,serif;font-size:19px;margin:0 0 4px;color:var(--herb-dark)}
+h3{font-family:Georgia,serif;font-size:15px;margin:18px 0 8px;color:var(--herb-dark)}
+.lede{color:var(--muted);max-width:70ch;margin:0 0 16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+  padding:16px 18px;margin:0 0 16px;max-width:1180px}
+.sub{color:var(--muted);font-size:13px;margin:4px 0 10px;max-width:70ch}
+button{font:inherit;padding:7px 14px;border-radius:8px;border:1px solid var(--line-dark);
+  background:var(--panel);color:var(--ink);cursor:pointer}
+button:hover{border-color:var(--herb)}
+button.pri{background:var(--herb);border-color:var(--herb);color:#fff}
+button.opt{padding:5px 12px;font-size:13px;border-radius:16px;margin:0 5px 6px 0}
+button.opt.on{background:var(--herb);border-color:var(--herb);color:#fff}
+.row{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+.slider{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--muted)}
+.slider input[type=range]{width:190px}
+.slider b{color:var(--ink);font-variant-numeric:tabular-nums;min-width:52px}
+.pillbar{margin-bottom:6px}
+.note{font-size:12.5px;color:var(--muted)}
+.warn{background:#FFF4E2;border:1px solid #E8C68A;color:#7A5312;border-radius:8px;
+  padding:9px 12px;font-size:13px;margin:10px 0}
+@media(prefers-color-scheme:dark){.warn{background:#3A2E18;border-color:#6B5527;color:#E8C68A}}
+.verdict{background:var(--bg);border:1px dashed var(--line-dark);border-radius:10px;
+  padding:9px 12px;font-size:13px;margin-top:10px}
+
+/* ---- the phone ---- */
+.phones{display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start}
+.phonewrap{display:flex;flex-direction:column;gap:6px}
+.phonewrap>.note{text-align:center}
+.phone{border:9px solid #2b2b2b;border-radius:26px;overflow:hidden;background:var(--bg);
+  height:600px;position:relative;box-shadow:0 6px 22px rgba(0,0,0,.22)}
+.phone .screen{width:100%;height:100%;overflow-y:auto;overflow-x:hidden;background:var(--bg)}
+/* Text size is a zoom, exactly as it is in the book-shelf app, and a zoom
+   multiplies everything inside — including how much width the layout believes
+   it has. That shrinking number is the whole point of this panel, so it is
+   printed under each phone rather than left to be imagined. */
+.screen>.inner{transform-origin:0 0}
+
+/* a miniature of the real app, close enough to judge but not the real thing */
+.mtop{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 11px;
+  background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+.mbrand{font-family:Georgia,serif;font-weight:700;color:var(--herb-dark);font-size:15px}
+.mtabs{display:flex;gap:4px;flex-wrap:wrap}
+.mtabs span{padding:5px 9px;border-radius:14px;font-size:11px;color:var(--muted);background:none}
+.mtabs span.on{background:var(--herb);color:#fff}
+.mbody{padding:11px}
+.mgrid{display:grid;gap:9px}
+.mcard{background:var(--panel);border:1px solid var(--line);border-radius:11px;overflow:hidden}
+.mcard .im{height:96px;background:#EAEDE3;position:relative}
+@media(prefers-color-scheme:dark){.mcard .im{background:#2C3227}}
+.mcard .im img{width:100%;height:100%;object-fit:cover;display:block}
+.mcard .noim{display:flex;align-items:center;justify-content:center;height:100%;
+  color:var(--line-dark);font-size:11px}
+.mcard .bd{padding:8px 10px}
+.mcard .ti{font-weight:600;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mcard .me{font-size:11.5px;color:var(--muted);margin-top:2px}
+.mrate{position:absolute;top:6px;right:6px;background:var(--ink);color:#fff;border-radius:5px;
+  padding:1px 6px;font-size:11px;font-weight:600}
+@media(prefers-color-scheme:dark){.mrate{background:#000;color:#fff}}
+.mfields{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:11px;margin-bottom:10px}
+.mname{font-family:Georgia,serif;font-weight:700;font-size:19px;border-bottom:2px solid var(--line);padding-bottom:3px}
+.mfrow{display:flex;gap:12px;flex-wrap:wrap;margin-top:9px;font-size:11px;color:var(--muted)}
+.mfrow i{font-style:normal;display:block;font-size:13.5px;color:var(--ink);font-weight:600}
+.mstep{display:flex;gap:8px;align-items:flex-start;background:var(--panel);border:1px solid var(--line);
+  border-radius:9px;padding:7px 9px;margin-bottom:6px}
+.mstep .n{flex:none;width:21px;height:21px;border-radius:50%;background:var(--herb);color:#fff;
+  font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center}
+.mstep .t{font-size:13.5px;line-height:1.5}
+/* the scrapbook layer: the thing Simple puts away */
+.mboard{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:11px;
+  background-image:radial-gradient(var(--line) 1px,transparent 1px);background-size:18px 18px;
+  height:190px;margin-bottom:10px;overflow:hidden}
+.mphoto{position:absolute;border-radius:7px;overflow:hidden;box-shadow:0 2px 8px rgba(31,36,25,.25)}
+.mphoto img{width:100%;height:100%;object-fit:cover;display:block}
+.mpad{position:absolute;background:var(--note);border-radius:4px;box-shadow:0 3px 10px rgba(31,36,25,.2);
+  font-size:10px;padding:6px;color:#2A2A1A;line-height:1.35}
+.simple .mboard{display:none}
+.simple .mphoto-stack{display:block}
+.mphoto-stack{display:none;margin-bottom:10px}
+.mphoto-stack img{width:100%;border-radius:11px;display:block;margin-bottom:7px}
+
+/* the pop-up, at both sizes */
+.mmodalback{position:absolute;inset:0;background:rgba(31,36,25,.45);z-index:9;display:flex;
+  align-items:center;justify-content:center;padding:12px}
+.mmodal{background:var(--panel);border-radius:12px;padding:13px;width:100%;max-height:90%;overflow:auto}
+.mmodal h4{margin:0 0 6px;font-family:Georgia,serif;font-size:15px;color:var(--herb-dark)}
+.mmodal .box{border:1px solid var(--line-dark);border-radius:8px;background:var(--bg);
+  min-height:150px;font-size:11px;padding:8px;color:var(--muted)}
+.mmodal .btns{display:flex;gap:7px;margin-top:10px}
+.mmodal .btns span{border:1px solid var(--line-dark);border-radius:7px;padding:6px 11px;font-size:12px}
+.mmodal .btns span.p{background:var(--herb);border-color:var(--herb);color:#fff}
+/* the sheet: same pop-up, anchored to the bottom, sized to its content */
+.sheet .mmodalback{align-items:flex-end;padding:0}
+.sheet .mmodal{border-radius:14px 14px 0 0;max-height:72%}
+
+/* ---- backgrounds ---- */
+.bggrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+.bgsw{position:relative;border:1px solid var(--line-dark);border-radius:12px;overflow:hidden;
+  padding:0;display:block;height:150px;cursor:pointer;text-align:left}
+.bgsw.on{outline:3px solid var(--herb);outline-offset:1px}
+.bgsw .lab{position:absolute;left:0;right:0;bottom:0;background:rgba(255,255,255,.86);
+  color:#1F2419;font-size:11px;padding:3px 6px;text-align:center}
+.bgsw .tag{position:absolute;top:6px;left:6px;background:var(--herb);color:#fff;font-size:9.5px;
+  border-radius:4px;padding:1px 5px;letter-spacing:.4px;text-transform:uppercase}
+/* a real card sits on every swatch, because the only question that matters
+   about a background is whether the writing on top of it stays readable */
+.bgsw .probe{position:absolute;left:12px;top:12px;right:12px;background:#FFFFFFEE;
+  border:1px solid #DFE4D6;border-radius:9px;padding:7px 9px}
+.bgsw .probe b{display:block;font-size:12.5px;color:#1F2419;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.bgsw .probe span{font-size:10.5px;color:#6C7263}
+
+/* the three kinds of movement, all deliberately far slower than anything you'd
+   notice while reading — you should catch it only if you look up */
+@keyframes drift{from{background-position:0 0}to{background-position:120px 120px}}
+@keyframes breathe{0%,100%{filter:hue-rotate(0deg) saturate(1)}50%{filter:hue-rotate(9deg) saturate(1.12)}}
+@keyframes sway{0%,100%{transform:scale(1.06) translate(0,0)}50%{transform:scale(1.06) translate(-1.4%,-1.1%)}}
+.mv-drift .fill{animation:drift 90s linear infinite}
+.mv-breathe .fill{animation:breathe 26s ease-in-out infinite}
+.mv-sway .fill{animation:sway 34s ease-in-out infinite}
+.bgsw .fill{position:absolute;inset:0}
+
+/* ---- the frame showroom ---- */
+.framebox{position:relative;height:330px;border-radius:12px;overflow:hidden;
+  border:1px solid var(--line-dark);background:var(--bg)}
+.framebox .ftop{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 16px;
+  background:var(--panel);border-bottom:1px solid var(--line);position:relative;z-index:2}
+.framebox .fpage{padding:14px 16px}
+.fdeco{position:absolute;inset:0;pointer-events:none;z-index:3}
+.fspots{position:absolute;left:0;right:0;bottom:0}
+.fdeco em{position:absolute;font-style:normal;line-height:1;
+  filter:drop-shadow(0 1px 1px rgba(31,36,25,.15))}
+
+/* ---- categories ---- */
+.schemes{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
+.scheme{border:1px solid var(--line);border-radius:12px;padding:12px 13px;background:var(--bg)}
+.scheme h4{margin:0 0 3px;font-size:14px}
+.scheme .why{font-size:12px;color:var(--muted);margin:0 0 9px;line-height:1.45}
+.bucket{display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:4px}
+.bucket .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bucket .ct{color:var(--muted);font-variant-numeric:tabular-nums;font-size:12px}
+.bucket .bar{flex:none;width:76px;height:7px;border-radius:4px;background:var(--line);overflow:hidden}
+.bucket .bar i{display:block;height:100%;background:var(--herb)}
+.bucket.lump .bar i{background:var(--paprika)}
+.scheme .score{margin-top:9px;font-size:12px;color:var(--muted);border-top:1px dashed var(--line);padding-top:7px}
+.scheme .score b{color:var(--ink)}
+</style>
+</head>
+<body>
+
+<h1>Pick how it should look</h1>
+<p class="lede">
+  This page opens the cookbook stored in <em>this</em> browser at <em>this</em> address, borrows your
+  real meals, and draws each choice with them in it. It never writes anything back — you can click
+  everything here and your cookbook is untouched. Open it at the same address you use the app.
+</p>
+
+<div class="card">
+  <button class="pri" id="go">Load my meals</button>
+  <span class="note" id="say" style="margin-left:12px"></span>
+</div>
+
+<div id="out" hidden>
+
+  <!-- ============ 1. the phone ============ -->
+  <div class="card">
+    <h2>1 · On a phone</h2>
+    <p class="sub">
+      Three separate complaints, three separate answers, and you can see them fight each other here:
+      text too small, having to zoom, and pop-ups that swallow the screen. The book-shelf app answers
+      the first two with a <b>Simple</b> switch and an <b>A− / A+</b> size remembered per device.
+      Drag the size up and watch the number under the phone: that is how much width the layout
+      actually has left, which is why things start overlapping long before you'd expect.
+    </p>
+
+    <div class="row">
+      <span class="pillbar">
+        <button class="opt on" data-mode="full" data-g="mode">🖥 Full — as it is now</button>
+        <button class="opt" data-mode="simple" data-g="mode">📱 Simple — scrapbook put away</button>
+      </span>
+    </div>
+    <div class="row">
+      <span class="pillbar">
+        <button class="opt" data-w="320" data-g="w">Small phone · 320</button>
+        <button class="opt on" data-w="390" data-g="w">Normal phone · 390</button>
+        <button class="opt" data-w="430" data-g="w">Large phone · 430</button>
+      </span>
+      <label class="slider">Text size
+        <input type="range" id="fs" min="100" max="190" step="5" value="100">
+        <b id="fsn">100%</b>
+      </label>
+    </div>
+
+    <div class="phones">
+      <div class="phonewrap">
+        <div class="phone" id="ph1"><div class="screen"><div class="inner" id="scr1"></div></div></div>
+        <div class="note" id="cap1"></div>
+      </div>
+      <div class="phonewrap">
+        <div class="phone" id="ph2"><div class="screen"><div class="inner" id="scr2"></div></div></div>
+        <div class="note" id="cap2"></div>
+      </div>
+      <div class="phonewrap">
+        <div class="phone" id="ph3"><div class="screen"><div class="inner" id="scr3"></div></div></div>
+        <div class="note" id="cap3"></div>
+      </div>
+    </div>
+
+    <div class="verdict" id="phoneVerdict"></div>
+  </div>
+
+  <!-- ============ 2. the frame ============ -->
+  <div class="card">
+    <h2>2 · The decorated edge</h2>
+    <p class="sub">
+      The overlap you're seeing isn't random. Every emoji is placed against the whole window, and the
+      top row sits at 4% down and 3% in — about 36 by 43 pixels, which is exactly where the app's name
+      and tabs are. Below, <b>As it is now</b> reproduces that; the rest are the ways out. I've already
+      committed the first fix (the emoji get their own layer that begins under the header), but the
+      look is yours to choose.
+    </p>
+    <div class="row">
+      <span class="pillbar" id="frameOpts">
+        <button class="opt on" data-f="now" data-g="f">As it is now</button>
+        <button class="opt" data-f="below" data-g="f">Below the header ✓ committed</button>
+        <button class="opt" data-f="corners" data-g="f">Corners only</button>
+        <button class="opt" data-f="edge" data-g="f">Tint, no emoji</button>
+        <button class="opt" data-f="bottom" data-g="f">Bottom edge only</button>
+      </span>
+      <label class="slider">How much
+        <input type="range" id="fcount" min="0" max="16" step="1" value="16">
+        <b id="fcountn">16 emoji</b>
+      </label>
+    </div>
+    <div class="row">
+      <span class="pillbar" id="themeOpts"></span>
+    </div>
+    <div class="framebox" id="framebox">
+      <div class="ftop">
+        <span style="font-family:Georgia,serif;font-weight:700;color:var(--herb-dark);font-size:20px">The Cookbook Board</span>
+        <span class="note">Meals · Search · What can I cook? · Temps &amp; times</span>
+      </div>
+      <div class="fpage" id="fpage"></div>
+      <div class="fdeco" id="fdeco"></div>
+    </div>
+  </div>
+
+  <!-- ============ 3. the background ============ -->
+  <div class="card">
+    <h2>3 · The background</h2>
+    <p class="sub">
+      Two things are being asked here and they pull apart, so they're two rows of controls.
+      <b>Boring</b> is about the palette: every background in the app today is deliberately very pale,
+      because the writing is dark. <b>Still</b> is about movement. Each swatch carries a real card off
+      your own shelf, so you can see whether the writing survives the prettier ones — that's the whole
+      reason the pale rule exists, and it's worth breaking with your eyes open rather than by accident.
+    </p>
+    <div class="row">
+      <span class="pillbar">
+        <button class="opt on" data-mv="none" data-g="mv">Still — as now</button>
+        <button class="opt" data-mv="drift" data-g="mv">Slow drift · 90s</button>
+        <button class="opt" data-mv="breathe" data-g="mv">Breathing colour · 26s</button>
+        <button class="opt" data-mv="sway" data-g="mv">Gentle sway · 34s</button>
+      </span>
+    </div>
+    <div class="row">
+      <label class="slider">Depth of colour
+        <input type="range" id="depth" min="0" max="100" step="5" value="0">
+        <b id="depthn">as now</b>
+      </label>
+      <span class="note">0 is exactly today's palette. Drag right to see how far it can go before the cards stop sitting comfortably on it.</span>
+    </div>
+    <h3>The twelve you have</h3>
+    <div class="bggrid" id="bgOld"></div>
+    <h3>Candidates for the not-boring end</h3>
+    <div class="bggrid" id="bgNew"></div>
+  </div>
+
+  <!-- ============ 4. categories ============ -->
+  <div class="card">
+    <h2>4 · Ways of sorting your meals</h2>
+    <p class="sub">
+      Items 5 and 7 both ask for categories, so here is every scheme I could build, run over
+      <b id="mealN">your</b> actual meals. A scheme is only worth having if it genuinely divides your
+      cookbook — one that puts nearly everything in a single bucket looks like a category system and
+      works like a label. The line at the bottom of each says how well it splits, and any bucket
+      holding more than half of everything is marked in orange.
+    </p>
+    <div class="schemes" id="schemes"></div>
+    <div class="verdict" id="catVerdict"></div>
+  </div>
+
+</div>
+
+<script>
+/* ================= reading the cookbook (read-only, always) ================= */
+const DB_NAME="cookbook", DB_VER=2;
+let MEALS=[], IMGS=new Map();
+
+const openDb=()=>new Promise((res,rej)=>{
+  const r=indexedDB.open(DB_NAME,DB_VER);
+  /* If this page is ever the first thing opened at a new address it must not
+     invent the database — an empty cookbook that looks real is worse than an
+     honest "nothing here". The upgrade handler deliberately creates nothing. */
+  r.onupgradeneeded=()=>{};
+  r.onsuccess=()=>res(r.result);
+  r.onerror=()=>rej(r.error);
+});
+const all=(db,store)=>new Promise((res,rej)=>{
+  if(!db.objectStoreNames.contains(store)) return res([]);
+  const q=db.transaction(store).objectStore(store).getAll();
+  q.onsuccess=()=>res(q.result); q.onerror=()=>rej(q.error);
+});
+const imgKey=(mealId,itemId)=>mealId+"__"+itemId;
+const coverOf=m=>{
+  const imgs=(m.items||[]).filter(i=>i.kind==="image");
+  return imgs.find(i=>i.id===m.coverId)||imgs[0]||null;
+};
+const photosOf=m=>(m.items||[]).filter(i=>i.kind==="image");
+
+async function load(){
+  const say=document.getElementById("say");
+  say.textContent="opening…";
+  let db;
+  try{ db=await openDb(); }
+  catch(e){ say.innerHTML='<span style="color:#B03A20">Couldn\'t open the cookbook: '+e+'</span>'; return; }
+
+  MEALS=await all(db,"meals");
+  if(!MEALS.length){
+    say.innerHTML='<span style="color:#B03A20">No meals found in this browser at this address.</span> '+
+      'This page can only see the cookbook saved at the exact address you open it from — '+
+      'open it next to your index.html, not from a file on the disk.';
+    return;
+  }
+  MEALS.sort((a,b)=>(b.created||0)-(a.created||0));
+
+  /* Photos are read one at a time and only the ones a card would show. A
+     cookbook can hold hundreds and pulling them all in at once to decorate a
+     showroom would be a silly way to spend your memory. */
+  const want=new Set();
+  MEALS.forEach(m=>{ const c=coverOf(m); if(c) want.add(imgKey(m.id,c.id)); });
+  MEALS.slice(0,4).forEach(m=>photosOf(m).slice(0,3).forEach(p=>want.add(imgKey(m.id,p.id))));
+  if(db.objectStoreNames.contains("images")){
+    const st=db.transaction("images").objectStore("images");
+    for(const k of want){
+      const blob=await new Promise(r=>{ const q=st.get(k); q.onsuccess=()=>r(q.result); q.onerror=()=>r(null); });
+      if(blob instanceof Blob) IMGS.set(k,URL.createObjectURL(blob));
+      else if(typeof blob==="string") IMGS.set(k,blob);
+    }
+  }
+
+  say.textContent=MEALS.length+" meals, "+IMGS.size+" photos — nothing was changed.";
+  document.getElementById("out").hidden=false;
+  document.getElementById("mealN").textContent="your "+MEALS.length;
+  drawPhones(); drawFrame(); drawBackgrounds(); drawSchemes();
+}
+document.getElementById("go").onclick=load;
+
+/* option pills: one group, one choice, remembered in `pick` */
+const pick={mode:"full",w:390,f:"now",mv:"none",theme:"leaves",bg:null};
+document.addEventListener("click",e=>{
+  const b=e.target.closest("button.opt"); if(!b) return;
+  const g=b.dataset.g; if(!g) return;
+  document.querySelectorAll('button.opt[data-g="'+g+'"]').forEach(x=>x.classList.toggle("on",x===b));
+  if(g==="mode") pick.mode=b.dataset.mode;
+  if(g==="w")    pick.w=+b.dataset.w;
+  if(g==="f")    pick.f=b.dataset.f;
+  if(g==="mv")   pick.mv=b.dataset.mv;
+  if(g==="th")   pick.theme=b.dataset.th;
+  if(g==="mode"||g==="w") drawPhones();
+  if(g==="f"||g==="th")   drawFrame();
+  if(g==="mv")            applyMotion();
+});
+
+/* ================= 1 · the phone ================= */
+const esc=s=>String(s==null?"":s).replace(/[<>&]/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]));
+const stepsOf=m=>String(m.instructions||"").split("\n")
+  .map(l=>l.replace(/^\s*\d+[.)]\s*/,"").trim()).filter(Boolean);
+
+function miniTop(){
+  return '<div class="mtop"><span class="mbrand">The Cookbook Board</span>'+
+    '<span class="mtabs"><span class="on">Meals</span><span>Search</span>'+
+    '<span>What can I cook?</span><span>Temps</span><span>Storage</span></span></div>';
+}
+function miniCard(m){
+  const c=coverOf(m), url=c?IMGS.get(imgKey(m.id,c.id)):null;
+  return '<div class="mcard"><div class="im">'+
+    (url?'<img src="'+url+'">':'<div class="noim">no photo</div>')+
+    '<span class="mrate">'+(m.rating!=null?m.rating:"—")+'</span></div>'+
+    '<div class="bd"><div class="ti">'+esc(m.name)+'</div>'+
+    '<div class="me">'+esc(m.mealType||"")+' · '+esc(m.device||"")+' · '+(m.prepTime||"?")+' min</div>'+
+    '</div></div>';
+}
+function screenList(){
+  /* One column or two is the single biggest readability decision on a phone, and
+     the app currently picks two at 150px minimum — which is what makes the names
+     ellipsize away to nothing. Simple shows one. */
+  const cols=pick.mode==="simple"?"1fr":"repeat(auto-fill,minmax(150px,1fr))";
+  return miniTop()+'<div class="mbody"><div class="mgrid" style="grid-template-columns:'+cols+'">'+
+    MEALS.slice(0,8).map(miniCard).join("")+'</div></div>';
+}
+function screenMeal(){
+  const m=MEALS.find(x=>stepsOf(x).length)||MEALS[0];
+  const ph=photosOf(m).slice(0,3).map(p=>IMGS.get(imgKey(m.id,p.id))).filter(Boolean);
+  const steps=stepsOf(m).slice(0,4);
+  let board='<div class="mboard">';
+  ph.forEach((u,i)=>{ board+='<div class="mphoto" style="left:'+(8+i*74)+'px;top:'+(10+i*30)+
+    'px;width:86px;height:70px"><img src="'+u+'"></div>'; });
+  board+='<div class="mpad" style="right:8px;bottom:10px;width:104px;height:64px">'+
+    esc((m.notes||"a note you stuck on the page").slice(0,70))+'</div></div>';
+  const stack=ph.length?'<div class="mphoto-stack">'+ph.map(u=>'<img src="'+u+'">').join("")+'</div>':"";
+  return miniTop()+'<div class="mbody">'+
+    '<div class="mfields"><div class="mname">'+esc(m.name)+'</div>'+
+    '<div class="mfrow"><span>Type<i>'+esc(m.mealType||"—")+'</i></span>'+
+    '<span>Device<i>'+esc(m.device||"—")+'</i></span>'+
+    '<span>Prep<i>'+(m.prepTime||"—")+' min</i></span>'+
+    '<span>Rating<i>'+(m.rating!=null?m.rating:"—")+'</i></span></div></div>'+
+    board+stack+
+    steps.map((s,i)=>'<div class="mstep"><span class="n">'+(i+1)+'</span><span class="t">'+esc(s)+'</span></div>').join("")+
+    '</div>';
+}
+function screenModal(){
+  const sheet=pick.mode==="simple";
+  return '<div class="'+(sheet?"sheet":"")+'" style="height:100%">'+miniTop()+
+    '<div class="mbody"><div class="mgrid" style="grid-template-columns:1fr">'+
+    MEALS.slice(0,3).map(miniCard).join("")+'</div></div>'+
+    '<div class="mmodalback"><div class="mmodal"><h4>Paste a recipe</h4>'+
+    '<div class="box">Copy a recipe off any site and paste the whole thing in here…</div>'+
+    '<div class="btns"><span class="p">Read it</span><span>Cancel</span></div>'+
+    '</div></div></div>';
+}
+
+function drawPhones(){
+  const f=+document.getElementById("fs").value;
+  document.getElementById("fsn").textContent=f+"%";
+  const z=f/100;
+  /* The honest number: a phone reports 390 CSS pixels, and a 150% zoom leaves
+     the layout 260 of them to lay anything out in. Every "why is this overlapping"
+     on a phone comes back to this line. */
+  const eff=Math.round(pick.w/z);
+  const bucket=eff<370?"micro":eff<560?"tiny":eff<780?"narrow":"wide";
+
+  [["scr1",screenList(),"The list of meals"],
+   ["scr2",screenMeal(),"A meal's page"],
+   ["scr3",screenModal(),"Paste a recipe"]].forEach(([id,htmlStr,cap],i)=>{
+    const el=document.getElementById(id);
+    el.className="inner"+(pick.mode==="simple"?" simple":"");
+    el.innerHTML=htmlStr;
+    /* The zoom is applied as a transform on a box widened to the phone's own
+       width divided by the zoom, so the phone stays the size a phone is and the
+       contents genuinely have less room — the same trick, and the same trap, as
+       the real thing. */
+    el.style.width=eff+"px";
+    el.style.transform="scale("+z+")";
+    /* The phone's 9px bezel is a border on a border-box element, so a wrapper set
+       to 390 leaves the screen only 372 and the content hung 18px off the right
+       edge. The bezel is added on top instead, so a 390px phone really does show
+       390px of page — which is the only reason any of these numbers mean anything. */
+    const wrap=el.parentElement.parentElement;
+    wrap.style.width=(pick.w+18)+"px";
+    document.getElementById("cap"+(i+1)).textContent=cap+" — "+pick.w+"px screen, "+eff+"px to lay out ("+bucket+")";
+  });
+
+  /* The verdict is measured, not asserted. An earlier draft simply claimed the
+     names were cut off, which at 390px and 100% they are not — the complaint only
+     bites once the text grows. So it counts the titles whose text is genuinely
+     wider than the box holding it, and says the real number. */
+  const titles=[...document.querySelectorAll("#scr1 .mcard .ti")];
+  const cut=titles.filter(t=>t.scrollWidth>t.clientWidth+1);
+  const cardW=titles.length?Math.round(titles[0].getBoundingClientRect().width/z):0;
+  const cutLine=cut.length
+    ? cut.length+" of the "+titles.length+" names on screen are cut off ("+
+      cut.slice(0,2).map(t=>"“"+t.textContent.slice(0,18)+"…”").join(", ")+")"
+    : "every name still fits — drag the size up and watch where that stops being true";
+
+  /* How many columns the grid ACTUALLY resolved to. Worth measuring rather than
+     assuming: the real app asks for auto-fill at a 150px minimum, and once the
+     text is large enough that two columns won't fit, it quietly drops to one and
+     the cards get wider again. Saying "two columns" through that would be wrong. */
+  const grid=document.querySelector("#scr1 .mgrid");
+  const cols=grid?getComputedStyle(grid).gridTemplateColumns.split(/\s+/).filter(Boolean).length:0;
+
+  const v=document.getElementById("phoneVerdict");
+  v.innerHTML= pick.mode==="simple"
+    ? "<b>Simple.</b> One column at "+cardW+"px — "+cutLine+". The freely-placed photos and sticky "+
+      "notes are stacked in order underneath the fields instead of floating over them; their real "+
+      "positions are kept, so switching back to Full puts everything exactly where you left it. "+
+      "The pop-up rises from the bottom and is only as tall as it needs to be."
+    : "<b>Full — what you have now.</b> With "+eff+"px to lay out, the list resolves to <b>"+cols+
+      (cols===1?" column":" columns")+"</b> of about "+cardW+"px, and "+cutLine+". "+
+      (cols===1
+        ? "Note it has already collapsed to one column on its own — so the cards are wide, and what's "+
+          "left to fix here is the text size and the board, not the grid."
+        : "The board keeps its free layout, which is what makes you pinch and zoom.")+
+      " The pop-up is centred and 90% of the screen tall.";
+}
+document.getElementById("fs").oninput=drawPhones;
+
+/* ================= 2 · the frame ================= */
+const FRAMES={
+  sakura:{label:"Sakura",emoji:["🌸","💮","🌷"],edge:"#F0BFCE"},
+  leaves:{label:"Fresh leaves",emoji:["🍃","🌿","☘️"],edge:"#B8D3A8"},
+  autumn:{label:"Autumn",emoji:["🍁","🍂","🌰"],edge:"#E0B183"},
+  citrus:{label:"Citrus",emoji:["🍋","🍊","🍃"],edge:"#EEDA96"},
+  berries:{label:"Berries",emoji:["🍓","🫐","🍒"],edge:"#E3AEBE"},
+  herbs:{label:"Herb garden",emoji:["🌱","🪴","🌾"],edge:"#C6CCA4"}
+};
+const SPOTS=[
+  {top:4,left:3,s:22,r:-15},{top:2,left:22,s:15,r:20},{top:5,left:44,s:18,r:-8},
+  {top:2,left:66,s:14,r:12},{top:4,left:88,s:21,r:-22},{top:30,left:1,s:15,r:30},
+  {top:58,left:2,s:18,r:-12},{top:82,left:1,s:14,r:18},{top:32,right:1,s:16,r:-25},
+  {top:60,right:2,s:19,r:10},{top:84,right:1,s:14,r:-18},{bottom:3,left:6,s:20,r:14},
+  {bottom:1,left:30,s:15,r:-20},{bottom:4,left:52,s:18,r:8},{bottom:2,left:74,s:14,r:-10},
+  {bottom:3,left:93,s:21,r:24}
+];
+const CORNERS=[
+  {top:5,left:2,s:22,r:-15},{top:4,right:2,s:21,r:20},
+  {bottom:4,left:2,s:20,r:14},{bottom:5,right:2,s:21,r:-18}
+];
+const BOTTOM=SPOTS.filter(p=>p.bottom!==undefined);
+
+document.getElementById("themeOpts").innerHTML=Object.entries(FRAMES)
+  .map(([k,f],i)=>'<button class="opt'+(i===1?" on":"")+'" data-th="'+k+'" data-g="th">'+f.label+'</button>').join("");
+
+function drawFrame(){
+  const f=FRAMES[pick.theme];
+  const n=+document.getElementById("fcount").value;
+
+  document.getElementById("fpage").innerHTML=
+    '<div class="mgrid" style="grid-template-columns:repeat(auto-fill,minmax(170px,1fr));display:grid;gap:10px">'+
+    MEALS.slice(0,4).map(miniCard).join("")+'</div>';
+
+  const deco=document.getElementById("fdeco");
+  let spots = pick.f==="corners" ? CORNERS
+            : pick.f==="edge"    ? []
+            : pick.f==="bottom"  ? BOTTOM
+            : SPOTS;
+  /* The slider is a proportion, not a count — each placement has a different
+     number of spots to thin out, and a slider reading "4" that drew one emoji
+     because the bottom-edge layout only has five to begin with was just a lie.
+     It says what actually got drawn. */
+  spots=spots.slice(0,Math.max(0,Math.round(n*spots.length/16)));
+  document.getElementById("fcountn").textContent=spots.length+(spots.length===1?" emoji":" emoji");
+
+  const inner=spots.map((p,i)=>'<em style="'+
+    (p.top!==undefined?"top:"+p.top+"%;":"bottom:"+(p.bottom||0)+"%;")+
+    (p.left!==undefined?"left:"+p.left+"%;":"right:"+(p.right||0)+"%;")+
+    "font-size:"+p.s+"px;transform:rotate("+p.r+'deg)">'+f.emoji[i%f.emoji.length]+"</em>").join("");
+
+  /* "Below the header" is the committed fix: the emoji get a layer that starts
+     under the header instead of over it. Reproduced here by offsetting the spot
+     layer by the header's measured height, exactly as --frame-top does. */
+  const barH=document.querySelector("#framebox .ftop").offsetHeight;
+  const off=(pick.f==="now")?0:barH;
+  deco.style.boxShadow="inset 0 0 0 6px "+f.edge+", inset 0 0 0 8px #FFFFFF";
+  deco.innerHTML='<div class="fspots" style="top:'+off+'px">'+inner+'</div>';
+}
+document.getElementById("fcount").oninput=drawFrame;
+
+/* ================= 3 · the background ================= */
+const OLD=[
+  {id:"paper",label:"Plain paper",css:"#F3F5EF"},
+  {id:"cream",label:"Cream",css:"#FAF6EC"},
+  {id:"linen",label:"Linen",css:"repeating-linear-gradient(45deg,#F6F4EC,#F6F4EC 6px,#F1EEE3 6px,#F1EEE3 12px)"},
+  {id:"grid",label:"Notebook grid",css:"linear-gradient(#E4E9DC 1px,transparent 1px) 0 0/22px 22px,linear-gradient(90deg,#E4E9DC 1px,transparent 1px) 0 0/22px 22px,#F5F7F0"},
+  {id:"dots",label:"Dotted",css:"radial-gradient(#DBE2D2 1.4px,transparent 1.4px) 0 0/20px 20px,#F5F7F0"},
+  {id:"sage",label:"Sage wash",css:"linear-gradient(160deg,#EDF2E7,#E2EBDD)"},
+  {id:"peach",label:"Peach wash",css:"linear-gradient(160deg,#FDF0E6,#F8E3D6)"},
+  {id:"sky",label:"Sky wash",css:"linear-gradient(160deg,#EAF2F7,#DCE9F2)"},
+  {id:"lilac",label:"Lilac wash",css:"linear-gradient(160deg,#F1ECF7,#E6DEF1)"},
+  {id:"butter",label:"Butter",css:"linear-gradient(160deg,#FBF6DE,#F5EDC9)"},
+  {id:"check",label:"Picnic check",css:"repeating-linear-gradient(0deg,#F7EDE9 0 14px,#FBF6F4 14px 28px),repeating-linear-gradient(90deg,#EFD9D2 0 14px,transparent 14px 28px)"},
+  {id:"marble",label:"Marble",css:"radial-gradient(at 20% 30%,#FFFFFF,transparent 45%),radial-gradient(at 75% 65%,#FFFFFF,transparent 40%),linear-gradient(135deg,#EFEFEA,#E6E7E0)"}
+];
+/* Candidates for "not boring". Each one has somewhere to go when the depth
+   slider is dragged — a pale end and a properly coloured end — because the
+   argument for the pale rule is only worth testing if there's a real other end
+   to test it against. */
+const NEW=[
+  {id:"tile",label:"Kitchen tiles",tag:"pattern",
+   pale:"repeating-linear-gradient(0deg,#EEF3EA 0 26px,#E4EBDF 26px 27px),repeating-linear-gradient(90deg,transparent 0 26px,#E4EBDF 26px 27px),#F2F6EE",
+   deep:"repeating-linear-gradient(0deg,#CFE0CB 0 26px,#A9C4A4 26px 27px),repeating-linear-gradient(90deg,transparent 0 26px,#A9C4A4 26px 27px),#D7E5D2"},
+  {id:"herbfield",label:"Herb field",tag:"deeper wash",
+   pale:"linear-gradient(160deg,#E7F0E2,#D8E6D3)",deep:"linear-gradient(160deg,#9FC0A0,#6E9A78)"},
+  {id:"copper",label:"Copper pan",tag:"warm",
+   pale:"linear-gradient(150deg,#FBEFE3,#F4DFCC)",deep:"linear-gradient(150deg,#DCA274,#B9713F)"},
+  {id:"slate",label:"Slate worktop",tag:"dark-leaning",
+   pale:"linear-gradient(150deg,#EDEEEC,#DFE2DE)",deep:"linear-gradient(150deg,#7B837C,#4C554E)"},
+  {id:"linenD",label:"Heavy linen",tag:"texture",
+   pale:"repeating-linear-gradient(45deg,#F6F4EC,#F6F4EC 6px,#EDE9DC 6px,#EDE9DC 12px)",
+   deep:"repeating-linear-gradient(45deg,#D9D2BB,#D9D2BB 6px,#C2B899 6px,#C2B899 12px)"},
+  {id:"stoneware",label:"Stoneware",tag:"speckled",
+   pale:"radial-gradient(#E2E5DA 1.1px,transparent 1.1px) 0 0/9px 9px,linear-gradient(150deg,#F5F6F1,#EAEDE4)",
+   deep:"radial-gradient(#8E9887 1.1px,transparent 1.1px) 0 0/9px 9px,linear-gradient(150deg,#C3CBBB,#A6B29C)"},
+  {id:"embers",label:"Embers",tag:"warm dark",
+   pale:"radial-gradient(at 25% 25%,#FBEDE2,transparent 55%),linear-gradient(150deg,#F7E9DE,#F0DACA)",
+   deep:"radial-gradient(at 25% 25%,#C8703C,transparent 55%),linear-gradient(150deg,#8E4526,#5A2A18)"},
+  {id:"marbleD",label:"Green marble",tag:"veined",
+   pale:"radial-gradient(at 20% 30%,#FFFFFF,transparent 45%),radial-gradient(at 75% 65%,#FFFFFF,transparent 40%),linear-gradient(135deg,#EAEFE6,#DDE5D9)",
+   deep:"radial-gradient(at 20% 30%,#DFEBDC,transparent 45%),radial-gradient(at 75% 65%,#E7F0E3,transparent 40%),linear-gradient(135deg,#7FA083,#547659)"}
+];
+
+function mix(a,b,t){
+  /* Blends the pale end into the deep end so the slider is continuous rather
+     than a two-way switch. Both ends are drawn stacked and the deep one is
+     faded in on top — far simpler than interpolating every colour stop, and
+     visually the same thing. */
+  return '<div class="fill" style="background:'+a+'"></div>'+
+         '<div class="fill" style="background:'+b+';opacity:'+t.toFixed(2)+'"></div>';
+}
+function swatch(b,isNew,t){
+  const m=MEALS[0]||{name:"a meal",mealType:"Dinner",device:"Oven",prepTime:30};
+  const fills=isNew?mix(b.pale,b.deep,t):'<div class="fill" style="background:'+b.css+'"></div>';
+  return '<div class="bgsw" data-bg="'+b.id+'">'+fills+
+    (b.tag?'<span class="tag">'+b.tag+'</span>':"")+
+    '<div class="probe"><b>'+esc(m.name)+'</b>'+
+    '<span>'+esc(m.mealType||"")+' · '+esc(m.device||"")+' · '+(m.prepTime||"?")+' min</span></div>'+
+    '<div class="lab">'+esc(b.label)+'</div></div>';
+}
+function drawBackgrounds(){
+  const t=+document.getElementById("depth").value/100;
+  document.getElementById("depthn").textContent=t===0?"as now":Math.round(t*100)+"%";
+  document.getElementById("bgOld").innerHTML=OLD.map(b=>swatch(b,false,0)).join("");
+  document.getElementById("bgNew").innerHTML=NEW.map(b=>swatch(b,true,t)).join("");
+  applyMotion();
+}
+function applyMotion(){
+  document.querySelectorAll(".bgsw").forEach(el=>{
+    el.classList.remove("mv-drift","mv-breathe","mv-sway");
+    if(pick.mv!=="none") el.classList.add("mv-"+pick.mv);
+  });
+}
+document.getElementById("depth").oninput=drawBackgrounds;
+document.addEventListener("click",e=>{
+  const sw=e.target.closest(".bgsw"); if(!sw) return;
+  document.querySelectorAll(".bgsw").forEach(x=>x.classList.toggle("on",x===sw));
+  pick.bg=sw.dataset.bg;
+});
+
+/* ================= 4 · categories ================= */
+/* Protein is worked out from the ingredients rather than stored, so this is
+   also a live test of whether that guess is good enough to build a category on.
+   Anything it can't place lands in "no meat named", which on a cookbook full of
+   meat would be the sign that the guess isn't good enough. */
+const PROTEIN=[
+  ["Chicken & turkey",/\b(chicken|turkey|poultry)\b/i],
+  ["Beef",/\b(beef|steak|mince|burger|brisket)\b/i],
+  ["Pork",/\b(pork|bacon|ham|sausage|gammon|chorizo|pancetta)\b/i],
+  ["Lamb",/\b(lamb|mutton)\b/i],
+  ["Fish & seafood",/\b(salmon|cod|haddock|tuna|prawn|shrimp|fish|seafood|mackerel)\b/i],
+  ["Egg & dairy",/\b(egg|halloumi|paneer|cheese)\b/i],
+  ["Beans & pulses",/\b(chickpea|lentil|bean|tofu|quinoa)\b/i]
+];
+function proteinOf(m){
+  const hay=[(m.ingredients||[]).join(" "),m.name||""].join(" ");
+  for(const [name,re] of PROTEIN) if(re.test(hay)) return name;
+  return "No meat named";
+}
+const speedOf=m=>{ const t=+m.prepTime||0;
+  return t<=20?"Quick · 20 min or less":t<=45?"Middling · 20–45 min":"Long · 45 min and up"; };
+const ratedOf=m=>{ const r=+m.rating||0;
+  return r>=9?"Nine and up":r>=8?"Eight-something":r>=7?"Seven-something":"Below seven"; };
+const cookedOf=m=>{ const n=(m.cookLog||[]).length;
+  return n===0?"Never cooked":n<3?"Cooked once or twice":"A regular"; };
+
+const SCHEMES=[
+  {name:"Meal type",why:"Breakfast, lunch, dinner. Already in the Meals tab; not in What can I cook?",of:m=>m.mealType||"Unset"},
+  {name:"Device",why:"Oven, air fryer, stovetop. Already in the Meals tab; the obvious one for an air-fryer-first cookbook.",of:m=>m.device||"Unset"},
+  {name:"Protein",why:"Guessed from the ingredients — there's no field for it. New.",of:proteinOf},
+  {name:"How long",why:"Prep time in three bands. The \"I have twenty minutes\" question. New.",of:speedOf},
+  {name:"How good",why:"Your own rating, banded. New.",of:ratedOf},
+  {name:"How often you cook it",why:"From the cook log. Turns the list into \"what am I neglecting\". New.",of:cookedOf}
+];
+
+function drawSchemes(){
+  const host=document.getElementById("schemes");
+  const results=SCHEMES.map(s=>{
+    const map=new Map();
+    MEALS.forEach(m=>{ const k=s.of(m); map.set(k,(map.get(k)||0)+1); });
+    const buckets=[...map.entries()].sort((a,b)=>b[1]-a[1]);
+    const biggest=buckets[0]?buckets[0][1]/MEALS.length:1;
+    return {s,buckets,biggest};
+  });
+  host.innerHTML=results.map(({s,buckets,biggest})=>{
+    const rows=buckets.map(([k,n])=>{
+      const share=n/MEALS.length;
+      return '<div class="bucket'+(share>0.5?" lump":"")+'">'+
+        '<span class="nm">'+esc(k)+'</span>'+
+        '<span class="bar"><i style="width:'+(share*100).toFixed(0)+'%"></i></span>'+
+        '<span class="ct">'+n+'</span></div>';
+    }).join("");
+    const verdict = buckets.length<2 ? "Everything lands in one bucket — this isn't a category system on your cookbook."
+      : biggest>0.5 ? "Splits into "+buckets.length+", but "+Math.round(biggest*100)+"% sit in the biggest one."
+      : "Splits into "+buckets.length+", the biggest holding "+Math.round(biggest*100)+"%. Genuinely divides your cookbook.";
+    return '<div class="scheme"><h4>'+esc(s.name)+'</h4><p class="why">'+esc(s.why)+'</p>'+rows+
+      '<div class="score">'+verdict+'</div></div>';
+  }).join("");
+
+  const good=results.filter(r=>r.buckets.length>=2&&r.biggest<=0.5).map(r=>r.s.name);
+  document.getElementById("catVerdict").innerHTML= good.length
+    ? "<b>On your "+MEALS.length+" meals, these divide it properly:</b> "+good.join(", ")+
+      ". The rest still work as filter chips — they just don't earn being the thing the page is organised by."
+    : "<b>None of these splits your cookbook evenly yet</b> — with "+MEALS.length+" meals that's expected, "+
+      "and it's an argument for categories as chips you tick rather than headings the page is built around.";
+}
+</script>
+</body>
+</html>
