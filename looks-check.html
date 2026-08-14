@@ -179,14 +179,20 @@ button.opt.on{background:var(--herb);border-color:var(--herb);color:#fff}
 
 <h1>Pick how it should look</h1>
 <p class="lede">
-  This page opens the cookbook stored in <em>this</em> browser at <em>this</em> address, borrows your
-  real meals, and draws each choice with them in it. It never writes anything back — you can click
-  everything here and your cookbook is untouched. Open it at the same address you use the app.
+  <b>What to do here:</b> scroll down. There are four questions, each with buttons and sliders —
+  click and drag whatever you like and watch what happens. Nothing here changes your cookbook;
+  it only reads it, and it can't write to it at all. When you've found the ones you like,
+  tell me which and I'll build them into the real app.
+</p>
+<p class="lede">
+  It draws every choice using the meals saved in <em>this</em> browser at <em>this</em> address.
+  If there aren't any, it borrows fourteen ordinary ones instead and says so, so the page always
+  works wherever you open it.
 </p>
 
 <div class="card">
-  <button class="pri" id="go">Load my meals</button>
-  <span class="note" id="say" style="margin-left:12px"></span>
+  <span class="note" id="say"></span>
+  <button id="go" style="margin-left:12px">Re-read my cookbook</button>
 </div>
 
 <div id="out" hidden>
@@ -347,19 +353,51 @@ const coverOf=m=>{
 };
 const photosOf=m=>(m.items||[]).filter(i=>i.kind==="image");
 
+/* Stand-ins, used only when this browser has no cookbook to borrow from. The
+   first draft refused to draw anything at all in that case, which turned the
+   whole page into a dead end for anyone opening it in a browser they hadn't
+   used the app in yet — the exact situation it was most likely to be opened in.
+   A showroom with borrowed furniture still answers "which of these do I like". */
+const STANDINS=[
+  ["Air fryer chicken & wedges","Dinner","Air fryer",30,8.2,["chicken thigh","potato","smoked paprika"],6],
+  ["Spaghetti carbonara","Dinner","Stovetop",20,8.5,["spaghetti","bacon","egg","parmesan"],3],
+  ["Salmon traybake","Dinner","Oven",30,8.6,["salmon","potato","green beans","lemon"],2],
+  ["Beef chilli","Dinner","Stovetop",45,8.7,["beef mince","onion","kidney beans","cumin"],9],
+  ["Cheese omelette","Breakfast","Stovetop",10,7.5,["egg","cheese","butter"],1],
+  ["Brownies","Dessert","Oven",45,9.2,["chocolate","butter","sugar","egg","flour"],4],
+  ["Air fryer pork chops","Dinner","Air fryer",18,8.0,["pork chop","garlic powder"],2],
+  ["Tomato soup","Lunch","Stovetop",30,7.8,["chopped tomatoes","onion","basil"],0],
+  ["Chickpea curry","Dinner","Stovetop",30,8.3,["chickpeas","coconut milk","spinach"],5],
+  ["Loaded jacket potato","Lunch","Oven",80,7.6,["potato","cheddar","baked beans"],0],
+  ["Air fryer salmon","Dinner","Air fryer",12,8.8,["salmon","lemon"],7],
+  ["Pancakes","Breakfast","Stovetop",20,8.4,["flour","egg","milk"],3],
+  ["Egg fried rice","Dinner","Stovetop",15,8.1,["rice","egg","peas","soy sauce"],8],
+  ["Air fryer chips","Snack","Air fryer",20,7.9,["potato","vegetable oil","salt"],11]
+].map((r,i)=>({
+  id:"stand"+i, name:r[0], mealType:r[1], device:r[2], prepTime:r[3], rating:r[4],
+  ingredients:r[5], cookLog:new Array(r[6]).fill(0), favorite:i%4===0,
+  notes:"a note you stuck on the page", created:-i,
+  instructions:"1. Get everything out and heat the pan.\n2. Season it well and give it room.\n"+
+    "3. Leave it alone until it colours.\n4. Rest it a minute before serving.",
+  items:[]
+}));
+
+let BORROWED=false;
+
 async function load(){
   const say=document.getElementById("say");
   say.textContent="opening…";
-  let db;
-  try{ db=await openDb(); }
-  catch(e){ say.innerHTML='<span style="color:#B03A20">Couldn\'t open the cookbook: '+e+'</span>'; return; }
+  let db=null;
+  try{ db=await openDb(); MEALS=await all(db,"meals"); }
+  catch(e){ MEALS=[]; }
 
-  MEALS=await all(db,"meals");
   if(!MEALS.length){
-    say.innerHTML='<span style="color:#B03A20">No meals found in this browser at this address.</span> '+
-      'This page can only see the cookbook saved at the exact address you open it from — '+
-      'open it next to your index.html, not from a file on the disk.';
-    return;
+    BORROWED=true;
+    MEALS=STANDINS.slice();
+    db=null;
+    say.innerHTML='<b>Showing stand-in meals.</b> This browser has no cookbook saved at this address, '+
+      'so the page borrowed fourteen ordinary ones to draw with. Every choice below still works — '+
+      'open the same page where your own cookbook lives and it will use yours instead.';
   }
   MEALS.sort((a,b)=>(b.created||0)-(a.created||0));
 
@@ -369,7 +407,7 @@ async function load(){
   const want=new Set();
   MEALS.forEach(m=>{ const c=coverOf(m); if(c) want.add(imgKey(m.id,c.id)); });
   MEALS.slice(0,4).forEach(m=>photosOf(m).slice(0,3).forEach(p=>want.add(imgKey(m.id,p.id))));
-  if(db.objectStoreNames.contains("images")){
+  if(db&&db.objectStoreNames.contains("images")){
     const st=db.transaction("images").objectStore("images");
     for(const k of want){
       const blob=await new Promise(r=>{ const q=st.get(k); q.onsuccess=()=>r(q.result); q.onerror=()=>r(null); });
@@ -378,12 +416,17 @@ async function load(){
     }
   }
 
-  say.textContent=MEALS.length+" meals, "+IMGS.size+" photos — nothing was changed.";
+  if(!BORROWED)
+    say.textContent=MEALS.length+" of your meals, "+IMGS.size+" of your photos — nothing was changed.";
   document.getElementById("out").hidden=false;
-  document.getElementById("mealN").textContent="your "+MEALS.length;
+  document.getElementById("mealN").textContent=(BORROWED?"the ":"your ")+MEALS.length;
   drawPhones(); drawFrame(); drawBackgrounds(); drawSchemes();
 }
+/* Opens by itself. The button was one more thing to work out before the page
+   showed anything, and "press this first" is exactly the instruction that
+   shouldn't be needed on a page whose whole job is to be looked at. */
 document.getElementById("go").onclick=load;
+load();
 
 /* option pills: one group, one choice, remembered in `pick` */
 const pick={mode:"full",w:390,f:"now",mv:"none",theme:"leaves",bg:null};
@@ -726,11 +769,14 @@ function drawSchemes(){
   }).join("");
 
   const good=results.filter(r=>r.buckets.length>=2&&r.biggest<=0.5).map(r=>r.s.name);
-  document.getElementById("catVerdict").innerHTML= good.length
-    ? "<b>On your "+MEALS.length+" meals, these divide it properly:</b> "+good.join(", ")+
+  const whose=BORROWED?"these "+MEALS.length+" stand-in meals":"your "+MEALS.length+" meals";
+  document.getElementById("catVerdict").innerHTML= (good.length
+    ? "<b>On "+whose+", these divide it properly:</b> "+good.join(", ")+
       ". The rest still work as filter chips — they just don't earn being the thing the page is organised by."
-    : "<b>None of these splits your cookbook evenly yet</b> — with "+MEALS.length+" meals that's expected, "+
-      "and it's an argument for categories as chips you tick rather than headings the page is built around.";
+    : "<b>None of these splits "+whose+" evenly</b> — which is itself an argument for categories as chips "+
+      "you tick rather than headings the page is built around.")+
+    (BORROWED?" <em>These are borrowed meals, so treat the numbers as a demonstration — "+
+      "opened where your own cookbook lives, this paragraph answers the question for real.</em>":"");
 }
 </script>
 </body>
